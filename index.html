@@ -1,0 +1,1911 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PédoPsy Planning — Hôpital de Jour</title>
+
+<!-- jsPDF + html2pdf pour export PDF -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<!-- PapaParse pour CSV -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+<style>
+/* =====================================================
+   VARIABLES & RESET
+   ===================================================== */
+:root {
+  --bg:        #f4f6f9;
+  --surface:   #ffffff;
+  --surface2:  #eef1f6;
+  --border:    #d4dae6;
+  --primary:   #1a4f8a;
+  --primary-l: #2563b0;
+  --accent:    #0ea5c4;
+  --success:   #16a34a;
+  --warning:   #d97706;
+  --danger:    #dc2626;
+  --text:      #1e2533;
+  --text-m:    #4b5563;
+  --text-l:    #8b95a8;
+  --shadow:    0 2px 12px rgba(26,79,138,.10);
+  --shadow-lg: 0 8px 32px rgba(26,79,138,.14);
+  --radius:    10px;
+  --radius-sm: 6px;
+  --font:      'Segoe UI', system-ui, sans-serif;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; font-size: 14px; }
+button { cursor: pointer; font-family: var(--font); }
+input, textarea, select { font-family: var(--font); }
+a { color: var(--primary); text-decoration: none; }
+
+/* =====================================================
+   LAYOUT
+   ===================================================== */
+#app { display: flex; min-height: 100vh; }
+
+/* SIDEBAR */
+#sidebar {
+  width: 220px; min-width: 220px;
+  background: var(--primary);
+  color: #fff;
+  display: flex; flex-direction: column;
+  padding: 0;
+  position: sticky; top: 0; height: 100vh;
+  overflow-y: auto;
+}
+#sidebar-logo {
+  padding: 22px 20px 16px;
+  border-bottom: 1px solid rgba(255,255,255,.12);
+}
+#sidebar-logo h1 { font-size: 15px; font-weight: 700; letter-spacing: .3px; line-height: 1.3; }
+#sidebar-logo p  { font-size: 11px; opacity: .65; margin-top: 3px; }
+
+#sidebar nav { flex: 1; padding: 12px 0; }
+.nav-section { padding: 8px 16px 4px; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; opacity: .45; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 20px;
+  cursor: pointer; font-size: 13px; font-weight: 500;
+  opacity: .75; transition: all .15s;
+  border-left: 3px solid transparent;
+}
+.nav-item:hover { opacity: 1; background: rgba(255,255,255,.08); }
+.nav-item.active { opacity: 1; background: rgba(255,255,255,.14); border-left-color: #fff; }
+.nav-item .icon { font-size: 16px; width: 20px; text-align: center; }
+
+#sidebar-footer {
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255,255,255,.12);
+  font-size: 11px; opacity: .5;
+}
+
+/* MAIN */
+#main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+#topbar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 28px;
+  height: 56px;
+  display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; z-index: 100;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+#topbar-title { font-size: 17px; font-weight: 700; color: var(--primary); }
+#topbar-actions { display: flex; gap: 8px; }
+
+#content { flex: 1; padding: 28px; overflow-y: auto; }
+
+/* =====================================================
+   COMPONENTS
+   ===================================================== */
+/* Cards */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  margin-bottom: 18px;
+}
+.card-title {
+  font-size: 14px; font-weight: 700; color: var(--primary);
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: var(--radius-sm);
+  border: none; font-size: 13px; font-weight: 600;
+  transition: all .15s; white-space: nowrap;
+}
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-l); }
+.btn-accent  { background: var(--accent); color: #fff; }
+.btn-accent:hover { filter: brightness(1.08); }
+.btn-success { background: var(--success); color: #fff; }
+.btn-success:hover { filter: brightness(1.08); }
+.btn-danger  { background: var(--danger); color: #fff; }
+.btn-danger:hover  { filter: brightness(1.08); }
+.btn-ghost  { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-ghost:hover  { background: var(--border); }
+.btn-warning { background: var(--warning); color: #fff; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-xs { padding: 3px 8px; font-size: 11px; }
+
+/* Forms */
+.form-group { margin-bottom: 14px; }
+.form-label { display: block; font-size: 12px; font-weight: 600; color: var(--text-m); margin-bottom: 5px; }
+.form-control {
+  width: 100%; padding: 8px 11px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 13px; color: var(--text);
+  background: var(--surface); transition: border .15s;
+  outline: none;
+}
+.form-control:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(14,165,196,.12); }
+textarea.form-control { resize: vertical; min-height: 80px; }
+.form-row { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+.form-row-3 { display: grid; gap: 12px; grid-template-columns: 1fr 1fr 1fr; }
+
+/* Tables */
+.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.data-table th {
+  background: var(--surface2); text-align: left;
+  padding: 9px 12px; font-weight: 700; color: var(--text-m);
+  font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+  border-bottom: 2px solid var(--border);
+}
+.data-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { background: var(--surface2); }
+.data-table .actions { display: flex; gap: 6px; }
+
+/* Badges */
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 20px;
+  font-size: 11px; font-weight: 600;
+}
+.badge-primary { background: #dbeafe; color: var(--primary); }
+.badge-success { background: #dcfce7; color: var(--success); }
+.badge-warning { background: #fef3c7; color: var(--warning); }
+.badge-danger  { background: #fee2e2; color: var(--danger); }
+.badge-neutral { background: var(--surface2); color: var(--text-m); }
+
+/* Alerts */
+.alert {
+  padding: 10px 14px; border-radius: var(--radius-sm);
+  font-size: 13px; margin-bottom: 10px;
+  display: flex; align-items: flex-start; gap: 8px;
+}
+.alert-danger  { background: #fee2e2; color: #991b1b; border-left: 3px solid var(--danger); }
+.alert-warning { background: #fef3c7; color: #92400e; border-left: 3px solid var(--warning); }
+.alert-info    { background: #dbeafe; color: #1e40af; border-left: 3px solid var(--primary); }
+.alert-success { background: #dcfce7; color: #166534; border-left: 3px solid var(--success); }
+
+/* Modal */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45);
+  z-index: 1000; display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.modal {
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  width: 100%; max-width: 560px; max-height: 90vh;
+  overflow-y: auto;
+  animation: fadeIn .15s ease;
+}
+.modal-lg { max-width: 780px; }
+.modal-header {
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.modal-title { font-size: 15px; font-weight: 700; color: var(--primary); }
+.modal-close { background: none; border: none; font-size: 20px; color: var(--text-l); line-height: 1; }
+.modal-close:hover { color: var(--danger); }
+.modal-body { padding: 20px 22px; }
+.modal-footer { padding: 14px 22px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
+
+@keyframes fadeIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }
+
+/* Section header */
+.section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 18px;
+}
+.section-title { font-size: 20px; font-weight: 800; color: var(--primary); }
+.section-subtitle { font-size: 13px; color: var(--text-m); margin-top: 2px; }
+
+/* Empty state */
+.empty-state {
+  text-align: center; padding: 50px 20px; color: var(--text-l);
+}
+.empty-state .empty-icon { font-size: 40px; margin-bottom: 12px; }
+.empty-state p { font-size: 14px; }
+
+/* =====================================================
+   PLANNING GRID
+   ===================================================== */
+.planning-nav {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+}
+.week-label { font-size: 15px; font-weight: 700; color: var(--primary); }
+
+.planning-grid {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.planning-table {
+  width: 100%; border-collapse: collapse; min-width: 700px;
+}
+.planning-table th {
+  padding: 10px 8px; font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .5px;
+  background: var(--primary); color: #fff;
+  border: 1px solid rgba(255,255,255,.15);
+  text-align: center; min-width: 140px;
+}
+.planning-table th.time-col { min-width: 80px; background: #1a3d6e; }
+.planning-table td {
+  border: 1px solid var(--border);
+  padding: 4px; vertical-align: top;
+  height: 60px; min-width: 140px;
+}
+.planning-table td.time-cell {
+  background: var(--surface2); font-size: 12px; font-weight: 700;
+  color: var(--text-m); text-align: center; vertical-align: middle;
+  min-width: 80px;
+}
+.planning-slot {
+  background: #dbeafe; border: 1px solid #93c5fd;
+  border-radius: 4px; padding: 4px 6px; margin: 1px;
+  font-size: 11px; cursor: pointer; transition: all .1s;
+  position: relative;
+}
+.planning-slot:hover { filter: brightness(.95); }
+.planning-slot .slot-activity { font-weight: 700; color: var(--primary); }
+.planning-slot .slot-child    { color: var(--text-m); }
+.planning-slot .slot-pro      { color: var(--text-l); font-style: italic; }
+.planning-slot.conflict       { background: #fee2e2; border-color: #f87171; }
+.planning-slot.conflict .slot-activity { color: var(--danger); }
+.planning-slot .btn-remove {
+  position: absolute; top: 2px; right: 3px;
+  background: none; border: none; font-size: 13px;
+  color: var(--text-l); line-height: 1;
+}
+.planning-slot .btn-remove:hover { color: var(--danger); }
+.add-slot-btn {
+  width: 100%; height: 100%; background: none; border: none;
+  color: var(--text-l); font-size: 18px; opacity: 0;
+  transition: opacity .15s;
+}
+.planning-table td:hover .add-slot-btn { opacity: 1; }
+
+/* =====================================================
+   PROJET DE SOINS
+   ===================================================== */
+.soin-section { margin-bottom: 20px; }
+.soin-section h3 {
+  font-size: 13px; font-weight: 700; color: var(--primary);
+  text-transform: uppercase; letter-spacing: .5px;
+  margin-bottom: 8px; padding-bottom: 6px;
+  border-bottom: 2px solid var(--accent);
+}
+.objectif-item {
+  background: var(--surface2); border-radius: var(--radius-sm);
+  padding: 8px 12px; margin-bottom: 6px;
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 8px;
+}
+.objectif-text { flex: 1; font-size: 13px; }
+.objectif-statut { font-size: 11px; font-weight: 600; white-space: nowrap; }
+
+/* =====================================================
+   CONFLIT PANEL
+   ===================================================== */
+.conflict-list { list-style: none; }
+.conflict-list li {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 8px 12px; background: #fff3f3; border-radius: var(--radius-sm);
+  border-left: 3px solid var(--danger); margin-bottom: 6px;
+  font-size: 12px;
+}
+.conflict-icon { color: var(--danger); font-size: 15px; flex-shrink: 0; }
+
+/* =====================================================
+   PRINT / PDF STYLES
+   ===================================================== */
+@media print {
+  #sidebar, #topbar, #topbar-actions, .btn, .no-print { display: none !important; }
+  #content { padding: 0; }
+  .card { box-shadow: none; border: 1px solid #ccc; }
+  body { background: #fff; }
+}
+
+/* =====================================================
+   RESPONSIVE & UTILITY
+   ===================================================== */
+.hidden { display: none !important; }
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.gap-2 { gap: 8px; }
+.gap-3 { gap: 12px; }
+.mt-2 { margin-top: 8px; }
+.mt-3 { margin-top: 12px; }
+.text-center { text-align: center; }
+.text-danger { color: var(--danger); }
+.text-success { color: var(--success); }
+.text-muted   { color: var(--text-l); }
+.font-bold { font-weight: 700; }
+.w-full { width: 100%; }
+.stats-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 20px; }
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 18px;
+  box-shadow: var(--shadow);
+}
+.stat-num { font-size: 28px; font-weight: 800; color: var(--primary); }
+.stat-label { font-size: 12px; color: var(--text-m); margin-top: 2px; }
+.stat-icon { font-size: 22px; float: right; opacity: .3; }
+
+/* Color chips for activities */
+.chip {
+  display: inline-block; width: 10px; height: 10px;
+  border-radius: 50%; margin-right: 5px;
+  vertical-align: middle;
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <!-- SIDEBAR -->
+  <aside id="sidebar">
+    <div id="sidebar-logo">
+      <h1>🏥 PédoPsy<br>Planning</h1>
+      <p>Hôpital de Jour</p>
+    </div>
+    <nav>
+      <div class="nav-section">Tableau de bord</div>
+      <div class="nav-item active" data-page="dashboard" onclick="navigate('dashboard')">
+        <span class="icon">📊</span> Accueil
+      </div>
+
+      <div class="nav-section">Référentiels</div>
+      <div class="nav-item" data-page="enfants" onclick="navigate('enfants')">
+        <span class="icon">👶</span> Enfants / Ados
+      </div>
+      <div class="nav-item" data-page="professionnels" onclick="navigate('professionnels')">
+        <span class="icon">👩‍⚕️</span> Professionnels
+      </div>
+      <div class="nav-item" data-page="activites" onclick="navigate('activites')">
+        <span class="icon">🎨</span> Activités
+      </div>
+
+      <div class="nav-section">Planning</div>
+      <div class="nav-item" data-page="planning-collectif" onclick="navigate('planning-collectif')">
+        <span class="icon">📅</span> Collectif
+      </div>
+      <div class="nav-item" data-page="planning-individuel" onclick="navigate('planning-individuel')">
+        <span class="icon">📋</span> Individuel
+      </div>
+      <div class="nav-item" data-page="conflits" onclick="navigate('conflits')">
+        <span class="icon" id="nav-conflict-icon">⚠️</span> Conflits
+        <span id="conflict-badge" class="badge badge-danger hidden" style="margin-left:auto;font-size:10px;"></span>
+      </div>
+      <div class="nav-item" data-page="contraintes" onclick="navigate('contraintes')">
+        <span class="icon">🚫</span> Contraintes
+      </div>
+
+      <div class="nav-section">Soins</div>
+      <div class="nav-item" data-page="projets-soins" onclick="navigate('projets-soins')">
+        <span class="icon">📝</span> Projets de soins
+      </div>
+
+      <div class="nav-section">Données</div>
+      <div class="nav-item" data-page="import-export" onclick="navigate('import-export')">
+        <span class="icon">💾</span> Import / Export
+      </div>
+    </nav>
+    <div id="sidebar-footer">v1.0 — Données locales</div>
+  </aside>
+
+  <!-- MAIN -->
+  <div id="main">
+    <header id="topbar">
+      <div id="topbar-title">Tableau de bord</div>
+      <div id="topbar-actions"></div>
+    </header>
+    <main id="content"></main>
+  </div>
+</div>
+
+<!-- ===================== MODAL ===================== -->
+<div id="modal-overlay" class="modal-overlay hidden" onclick="closeModalOnOverlay(event)">
+  <div id="modal" class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title"></span>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer"></div>
+  </div>
+</div>
+
+<script>
+/* =====================================================
+   ÉTAT GLOBAL & PERSISTANCE
+   ===================================================== */
+const STORAGE_KEYS = {
+  enfants:       'hdj_enfants',
+  professionnels:'hdj_professionnels',
+  activites:     'hdj_activites',
+  planning:      'hdj_planning',
+  soins:         'hdj_soins',
+  contraintes:   'hdj_contraintes',
+  config:        'hdj_config'
+};
+
+// Couleurs pour les activités
+const COLORS = [
+  '#3b82f6','#8b5cf6','#ec4899','#10b981','#f59e0b',
+  '#06b6d4','#ef4444','#14b8a6','#f97316','#6366f1'
+];
+
+function load(key) {
+  try { return JSON.parse(localStorage.getItem(key)) || []; }
+  catch { return []; }
+}
+function loadObj(key, def={}) {
+  try { return JSON.parse(localStorage.getItem(key)) || def; }
+  catch { return def; }
+}
+function save(key, val) {
+  localStorage.setItem(key, JSON.stringify(val));
+}
+
+// ---- ID unique ----
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+}
+
+// ---- Données ----
+let state = {
+  enfants:        load(STORAGE_KEYS.enfants),
+  professionnels: load(STORAGE_KEYS.professionnels),
+  activites:      load(STORAGE_KEYS.activites),
+  // planning : { "semaine_ISO" : [ {id, enfantId, activiteId, proId, jour(0-4), creneauIdx} ] }
+  planning:       loadObj(STORAGE_KEYS.planning, {}),
+  // soins : { enfantId : { objectifs:[], activitesPrescrites:[], prosImpliques:[], observations:"", dateMAJ:"" } }
+  soins:          loadObj(STORAGE_KEYS.soins, {}),
+  // contraintes : [ {id, enfantA, enfantB, motif} ]
+  contraintes:    load(STORAGE_KEYS.contraintes),
+  config:         loadObj(STORAGE_KEYS.config, {
+    creneaux: ['08:00','08:30','09:00','09:30','10:00','10:30','11:00','11:30',
+               '13:30','14:00','14:30','15:00','15:30','16:00','16:30']
+  })
+};
+
+function persist() {
+  save(STORAGE_KEYS.enfants,        state.enfants);
+  save(STORAGE_KEYS.professionnels, state.professionnels);
+  save(STORAGE_KEYS.activites,      state.activites);
+  save(STORAGE_KEYS.planning,       state.planning);
+  save(STORAGE_KEYS.soins,          state.soins);
+  save(STORAGE_KEYS.contraintes,    state.contraintes);
+  save(STORAGE_KEYS.config,         state.config);
+}
+
+/* =====================================================
+   NAVIGATION
+   ===================================================== */
+let currentPage = 'dashboard';
+
+function navigate(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.page === page);
+  });
+  updateConflictBadge();
+  renderPage(page);
+}
+
+const PAGE_TITLES = {
+  'dashboard':          'Tableau de bord',
+  'enfants':            'Enfants / Adolescents',
+  'professionnels':     'Professionnels',
+  'activites':          'Activités thérapeutiques',
+  'planning-collectif': 'Planning collectif hebdomadaire',
+  'planning-individuel':'Planning individuel',
+  'conflits':           'Conflits & alertes',
+  'contraintes':        'Contraintes de co-présence',
+  'projets-soins':      'Projets de soins individuels',
+  'import-export':      'Import / Export des données'
+};
+
+function renderPage(page) {
+  document.getElementById('topbar-title').textContent = PAGE_TITLES[page] || page;
+  const content = document.getElementById('content');
+  const actions = document.getElementById('topbar-actions');
+  actions.innerHTML = '';
+
+  switch(page) {
+    case 'dashboard':          renderDashboard(content, actions); break;
+    case 'enfants':            renderEnfants(content, actions); break;
+    case 'professionnels':     renderProfessionnels(content, actions); break;
+    case 'activites':          renderActivites(content, actions); break;
+    case 'planning-collectif': renderPlanningCollectif(content, actions); break;
+    case 'planning-individuel':renderPlanningIndividuel(content, actions); break;
+    case 'conflits':           renderConflits(content, actions); break;
+    case 'contraintes':        renderContraintes(content, actions); break;
+    case 'projets-soins':      renderProjets(content, actions); break;
+    case 'import-export':      renderImportExport(content, actions); break;
+    default: content.innerHTML = '<p>Page non trouvée</p>';
+  }
+}
+
+/* =====================================================
+   HELPERS
+   ===================================================== */
+function nom(enfantId) {
+  const e = state.enfants.find(x=>x.id===enfantId);
+  return e ? e.prenom + ' ' + e.nom : '?';
+}
+function nomPro(proId) {
+  const p = state.professionnels.find(x=>x.id===proId);
+  return p ? p.prenom + ' ' + p.nom : '?';
+}
+function nomAct(actId) {
+  const a = state.activites.find(x=>x.id===actId);
+  return a ? a.nom : '?';
+}
+function colorAct(actId) {
+  const a = state.activites.find(x=>x.id===actId);
+  return a ? (a.couleur || COLORS[0]) : COLORS[0];
+}
+function age(ddn) {
+  if (!ddn) return '';
+  const d = new Date(ddn), now = new Date();
+  let a = now.getFullYear()-d.getFullYear();
+  if (now.getMonth()<d.getMonth()||(now.getMonth()===d.getMonth()&&now.getDate()<d.getDate())) a--;
+  return a+' ans';
+}
+
+// Semaine ISO courante
+function getWeekKey(d) {
+  const dt = d ? new Date(d) : new Date();
+  const day = dt.getDay(), diff = dt.getDate() - day + (day===0?-6:1);
+  dt.setDate(diff);
+  return dt.toISOString().slice(0,10);
+}
+function addWeek(wk, n) {
+  const d = new Date(wk);
+  d.setDate(d.getDate()+7*n);
+  return d.toISOString().slice(0,10);
+}
+function weekLabel(wk) {
+  const d = new Date(wk);
+  const fin = new Date(wk); fin.setDate(fin.getDate()+4);
+  const fmt = dt => dt.toLocaleDateString('fr-FR',{day:'2-digit',month:'long'});
+  return `Sem. du ${fmt(d)} au ${fmt(fin)}`;
+}
+
+const JOURS = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+
+function getSlots(wk) { return state.planning[wk] || []; }
+function setSlots(wk, arr) { state.planning[wk] = arr; persist(); }
+
+/* =====================================================
+   DÉTECTION DES CONFLITS
+   ===================================================== */
+function detectConflicts(wk) {
+  const slots = getSlots(wk);
+  const conflicts = [];
+
+  // 1. Chevauchements enfant (même enfant, même créneau, même jour)
+  for (let i=0; i<slots.length; i++) {
+    for (let j=i+1; j<slots.length; j++) {
+      const a=slots[i], b=slots[j];
+      if (a.enfantId===b.enfantId && a.jour===b.jour && a.creneauIdx===b.creneauIdx) {
+        conflicts.push({
+          type:'chevauchement',
+          ids:[a.id,b.id],
+          msg:`${nom(a.enfantId)} : présent(e) simultanément dans "${nomAct(a.activiteId)}" et "${nomAct(b.activiteId)}" le ${JOURS[a.jour]} à ${state.config.creneaux[a.creneauIdx]}`
+        });
+      }
+    }
+  }
+
+  // 2. Contraintes de co-présence
+  state.contraintes.forEach(ct => {
+    for (let i=0; i<slots.length; i++) {
+      for (let j=i+1; j<slots.length; j++) {
+        const a=slots[i], b=slots[j];
+        const match = (
+          a.jour===b.jour && a.creneauIdx===b.creneauIdx &&
+          a.activiteId===b.activiteId &&
+          ((a.enfantId===ct.enfantA && b.enfantId===ct.enfantB)||
+           (a.enfantId===ct.enfantB && b.enfantId===ct.enfantA))
+        );
+        if (match) {
+          conflicts.push({
+            type:'contrainte',
+            ids:[a.id,b.id],
+            msg:`Contrainte violée : ${nom(ct.enfantA)} et ${nom(ct.enfantB)} sont ensemble dans "${nomAct(a.activiteId)}" le ${JOURS[a.jour]} à ${state.config.creneaux[a.creneauIdx]}. Motif : ${ct.motif||'non précisé'}`
+          });
+        }
+      }
+    }
+  });
+
+  return conflicts;
+}
+
+function getAllConflicts() {
+  const all = [];
+  Object.keys(state.planning).forEach(wk => {
+    const c = detectConflicts(wk);
+    if (c.length) all.push({ wk, conflicts: c });
+  });
+  return all;
+}
+
+function updateConflictBadge() {
+  const all = getAllConflicts();
+  const total = all.reduce((s,x)=>s+x.conflicts.length,0);
+  const badge = document.getElementById('conflict-badge');
+  if (badge) {
+    if (total>0) { badge.textContent=total; badge.classList.remove('hidden'); }
+    else badge.classList.add('hidden');
+  }
+}
+
+/* =====================================================
+   MODAL
+   ===================================================== */
+function openModal(title, bodyHtml, footerHtml, large=false) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').innerHTML = bodyHtml;
+  document.getElementById('modal-footer').innerHTML = footerHtml;
+  document.getElementById('modal').className = 'modal' + (large ? ' modal-lg':'');
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+function closeModal() { document.getElementById('modal-overlay').classList.add('hidden'); }
+function closeModalOnOverlay(e) { if (e.target===document.getElementById('modal-overlay')) closeModal(); }
+
+/* =====================================================
+   PAGE: DASHBOARD
+   ===================================================== */
+function renderDashboard(el) {
+  const wk = getWeekKey();
+  const allC = getAllConflicts();
+  const totalConflits = allC.reduce((s,x)=>s+x.conflicts.length,0);
+
+  el.innerHTML = `
+  <div class="stats-row">
+    <div class="stat-card">
+      <span class="stat-icon">👶</span>
+      <div class="stat-num">${state.enfants.length}</div>
+      <div class="stat-label">Enfants / Adolescents</div>
+    </div>
+    <div class="stat-card">
+      <span class="stat-icon">👩‍⚕️</span>
+      <div class="stat-num">${state.professionnels.length}</div>
+      <div class="stat-label">Professionnels</div>
+    </div>
+    <div class="stat-card">
+      <span class="stat-icon">🎨</span>
+      <div class="stat-num">${state.activites.length}</div>
+      <div class="stat-label">Activités</div>
+    </div>
+    <div class="stat-card">
+      <span class="stat-icon">⚠️</span>
+      <div class="stat-num" style="color:${totalConflits?'var(--danger)':'var(--success)'}">${totalConflits}</div>
+      <div class="stat-label">Conflit(s) détecté(s)</div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+    <div class="card">
+      <div class="card-title">📅 Cette semaine — ${weekLabel(wk)}</div>
+      <p style="font-size:13px;color:var(--text-m)">
+        ${getSlots(wk).length} créneaux planifiés
+      </p>
+      <div class="mt-2">
+        <button class="btn btn-primary btn-sm" onclick="navigate('planning-collectif')">Voir le planning</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">⚠️ Alertes actives</div>
+      ${totalConflits===0
+        ? '<div class="alert alert-success">✅ Aucun conflit détecté</div>'
+        : allC.slice(0,3).map(x=>x.conflicts.map(c=>`<div class="alert alert-danger">${c.msg}</div>`).join('')).join('')
+      }
+      ${totalConflits>0?`<button class="btn btn-danger btn-sm mt-2" onclick="navigate('conflits')">Voir tous les conflits</button>`:''}
+    </div>
+
+    <div class="card">
+      <div class="card-title">👶 Derniers patients ajoutés</div>
+      ${state.enfants.length===0
+        ? '<p class="text-muted">Aucun patient enregistré.</p>'
+        : state.enfants.slice(-5).reverse().map(e=>`
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+            <span>${e.prenom} ${e.nom}</span>
+            <span class="badge badge-neutral">${age(e.ddn)}</span>
+          </div>`).join('')
+      }
+      <button class="btn btn-ghost btn-sm mt-2" onclick="navigate('enfants')">Gérer les patients</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📝 Projets de soins en cours</div>
+      ${state.enfants.filter(e=>state.soins[e.id]).slice(0,5).map(e=>`
+        <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+          <span>${e.prenom} ${e.nom}</span>
+          <span class="badge badge-primary">${(state.soins[e.id].objectifs||[]).length} obj.</span>
+        </div>`).join('') || '<p class="text-muted">Aucun projet de soins.</p>'}
+      <button class="btn btn-ghost btn-sm mt-2" onclick="navigate('projets-soins')">Projets de soins</button>
+    </div>
+  </div>`;
+}
+
+/* =====================================================
+   PAGE: ENFANTS
+   ===================================================== */
+function renderEnfants(el, actions) {
+  actions.innerHTML = `<button class="btn btn-primary btn-sm" onclick="modalEnfant()">+ Ajouter un patient</button>`;
+
+  if (state.enfants.length===0) {
+    el.innerHTML = `<div class="card"><div class="empty-state"><div class="empty-icon">👶</div><p>Aucun patient enregistré.<br>Cliquez sur "+ Ajouter un patient" pour commencer.</p></div></div>`;
+    return;
+  }
+
+  el.innerHTML = `
+  <div class="card" style="padding:0;overflow:hidden">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Nom</th><th>Prénom</th><th>Date de naissance</th><th>Âge</th>
+          <th>Informations cliniques</th><th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${state.enfants.map(e=>`
+          <tr>
+            <td><strong>${e.nom}</strong></td>
+            <td>${e.prenom}</td>
+            <td>${e.ddn||'—'}</td>
+            <td><span class="badge badge-neutral">${age(e.ddn)}</span></td>
+            <td style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.infos||'—'}</td>
+            <td>
+              <div class="actions">
+                <button class="btn btn-ghost btn-xs" onclick="modalEnfant('${e.id}')">✏️ Modifier</button>
+                <button class="btn btn-accent btn-xs" onclick="navigate('planning-individuel');selectEnfantPlanning('${e.id}')">📅 Planning</button>
+                <button class="btn btn-primary btn-xs" onclick="navigate('projets-soins');selectEnfantSoin('${e.id}')">📝 Soins</button>
+                <button class="btn btn-danger btn-xs" onclick="deleteEnfant('${e.id}')">🗑️</button>
+              </div>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function modalEnfant(id=null) {
+  const e = id ? state.enfants.find(x=>x.id===id) : null;
+  const body = `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Nom *</label>
+        <input id="f-nom" class="form-control" value="${e?.nom||''}" placeholder="Nom de famille"></div>
+      <div class="form-group"><label class="form-label">Prénom *</label>
+        <input id="f-prenom" class="form-control" value="${e?.prenom||''}" placeholder="Prénom"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Date de naissance</label>
+      <input id="f-ddn" type="date" class="form-control" value="${e?.ddn||''}"></div>
+    <div class="form-group"><label class="form-label">Numéro de dossier (facultatif)</label>
+      <input id="f-dossier" class="form-control" value="${e?.dossier||''}" placeholder="ex: 2024-001"></div>
+    <div class="form-group"><label class="form-label">Informations cliniques (diagnostic, contexte, notes)</label>
+      <textarea id="f-infos" class="form-control">${e?.infos||''}</textarea></div>`;
+
+  openModal(id ? 'Modifier le patient' : 'Ajouter un patient', body, `
+    <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+    <button class="btn btn-primary" onclick="saveEnfant('${id||''}')">💾 Enregistrer</button>`);
+}
+
+function saveEnfant(id) {
+  const nom    = document.getElementById('f-nom').value.trim();
+  const prenom = document.getElementById('f-prenom').value.trim();
+  if (!nom||!prenom) { alert('Nom et prénom obligatoires'); return; }
+  const data = {
+    nom, prenom,
+    ddn:    document.getElementById('f-ddn').value,
+    dossier:document.getElementById('f-dossier').value.trim(),
+    infos:  document.getElementById('f-infos').value.trim()
+  };
+  if (id) {
+    const idx = state.enfants.findIndex(x=>x.id===id);
+    state.enfants[idx] = { ...state.enfants[idx], ...data };
+  } else {
+    state.enfants.push({ id: uid(), ...data });
+  }
+  persist(); closeModal(); navigate('enfants');
+}
+
+function deleteEnfant(id) {
+  if (!confirm(`Supprimer ce patient ? Toutes ses entrées de planning seront également supprimées.`)) return;
+  state.enfants = state.enfants.filter(x=>x.id!==id);
+  // Nettoyer le planning
+  Object.keys(state.planning).forEach(wk => {
+    state.planning[wk] = state.planning[wk].filter(s=>s.enfantId!==id);
+  });
+  delete state.soins[id];
+  persist(); navigate('enfants');
+}
+
+/* =====================================================
+   PAGE: PROFESSIONNELS
+   ===================================================== */
+function renderProfessionnels(el, actions) {
+  actions.innerHTML = `<button class="btn btn-primary btn-sm" onclick="modalPro()">+ Ajouter un professionnel</button>`;
+
+  if (state.professionnels.length===0) {
+    el.innerHTML = `<div class="card"><div class="empty-state"><div class="empty-icon">👩‍⚕️</div><p>Aucun professionnel enregistré.</p></div></div>`;
+    return;
+  }
+
+  el.innerHTML = `
+  <div class="card" style="padding:0;overflow:hidden">
+    <table class="data-table">
+      <thead><tr><th>Nom</th><th>Prénom</th><th>Spécialité / Rôle</th><th>Contact</th><th>Actions</th></tr></thead>
+      <tbody>
+        ${state.professionnels.map(p=>`
+          <tr>
+            <td><strong>${p.nom}</strong></td>
+            <td>${p.prenom}</td>
+            <td><span class="badge badge-primary">${p.specialite||'—'}</span></td>
+            <td>${p.contact||'—'}</td>
+            <td><div class="actions">
+              <button class="btn btn-ghost btn-xs" onclick="modalPro('${p.id}')">✏️ Modifier</button>
+              <button class="btn btn-danger btn-xs" onclick="deletePro('${p.id}')">🗑️</button>
+            </div></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function modalPro(id=null) {
+  const p = id ? state.professionnels.find(x=>x.id===id) : null;
+  const body = `
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Nom *</label>
+        <input id="p-nom" class="form-control" value="${p?.nom||''}"></div>
+      <div class="form-group"><label class="form-label">Prénom *</label>
+        <input id="p-prenom" class="form-control" value="${p?.prenom||''}"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Spécialité / Rôle</label>
+      <select id="p-spec" class="form-control">
+        ${['Pédopsychiatre','Psychologue','Éducateur spécialisé','Orthophoniste','Psychomotricien',
+           'Infirmier(ère)','Art-thérapeute','Musicothérapeute','Assistant social','Autre'].map(s=>
+          `<option value="${s}" ${(p?.specialite||'')==s?'selected':''}>${s}</option>`).join('')}
+      </select></div>
+    <div class="form-group"><label class="form-label">Contact / Email (facultatif)</label>
+      <input id="p-contact" class="form-control" value="${p?.contact||''}"></div>
+    <div class="form-group"><label class="form-label">Notes</label>
+      <textarea id="p-notes" class="form-control">${p?.notes||''}</textarea></div>`;
+
+  openModal(id ? 'Modifier le professionnel' : 'Ajouter un professionnel', body, `
+    <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+    <button class="btn btn-primary" onclick="savePro('${id||''}')">💾 Enregistrer</button>`);
+}
+
+function savePro(id) {
+  const nom    = document.getElementById('p-nom').value.trim();
+  const prenom = document.getElementById('p-prenom').value.trim();
+  if (!nom||!prenom) { alert('Nom et prénom obligatoires'); return; }
+  const data = {
+    nom, prenom,
+    specialite: document.getElementById('p-spec').value,
+    contact:    document.getElementById('p-contact').value.trim(),
+    notes:      document.getElementById('p-notes').value.trim()
+  };
+  if (id) {
+    const idx = state.professionnels.findIndex(x=>x.id===id);
+    state.professionnels[idx] = { ...state.professionnels[idx], ...data };
+  } else {
+    state.professionnels.push({ id: uid(), ...data });
+  }
+  persist(); closeModal(); navigate('professionnels');
+}
+
+function deletePro(id) {
+  if (!confirm('Supprimer ce professionnel ?')) return;
+  state.professionnels = state.professionnels.filter(x=>x.id!==id);
+  persist(); navigate('professionnels');
+}
+
+/* =====================================================
+   PAGE: ACTIVITÉS
+   ===================================================== */
+function renderActivites(el, actions) {
+  actions.innerHTML = `<button class="btn btn-primary btn-sm" onclick="modalActivite()">+ Ajouter une activité</button>`;
+
+  if (state.activites.length===0) {
+    el.innerHTML = `<div class="card"><div class="empty-state"><div class="empty-icon">🎨</div><p>Aucune activité enregistrée.</p></div></div>`;
+    return;
+  }
+
+  el.innerHTML = `
+  <div class="card" style="padding:0;overflow:hidden">
+    <table class="data-table">
+      <thead><tr><th>Couleur</th><th>Nom</th><th>Description</th><th>Durée (min)</th><th>Capacité max</th><th>Actions</th></tr></thead>
+      <tbody>
+        ${state.activites.map(a=>`
+          <tr>
+            <td><span class="chip" style="background:${a.couleur||COLORS[0]};width:18px;height:18px;display:inline-block;border-radius:4px"></span></td>
+            <td><strong>${a.nom}</strong></td>
+            <td style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.description||'—'}</td>
+            <td>${a.duree||'—'} min</td>
+            <td>${a.capacite||'—'} participant(s)</td>
+            <td><div class="actions">
+              <button class="btn btn-ghost btn-xs" onclick="modalActivite('${a.id}')">✏️ Modifier</button>
+              <button class="btn btn-danger btn-xs" onclick="deleteActivite('${a.id}')">🗑️</button>
+            </div></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function modalActivite(id=null) {
+  const a = id ? state.activites.find(x=>x.id===id) : null;
+  const colorSwatches = COLORS.map(c=>`
+    <span onclick="document.getElementById('a-couleur').value='${c}';document.getElementById('color-preview').style.background='${c}'"
+      style="display:inline-block;width:24px;height:24px;border-radius:4px;background:${c};cursor:pointer;margin:2px;border:2px solid ${(a?.couleur||COLORS[0])===c?'#1a4f8a':'transparent'}"></span>`
+  ).join('');
+
+  const body = `
+    <div class="form-group"><label class="form-label">Nom de l'activité *</label>
+      <input id="a-nom" class="form-control" value="${a?.nom||''}"></div>
+    <div class="form-group"><label class="form-label">Description</label>
+      <textarea id="a-descr" class="form-control">${a?.description||''}</textarea></div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Durée (minutes)</label>
+        <input id="a-duree" type="number" min="15" step="15" class="form-control" value="${a?.duree||60}"></div>
+      <div class="form-group"><label class="form-label">Capacité max (participants)</label>
+        <input id="a-capacite" type="number" min="1" class="form-control" value="${a?.capacite||8}"></div>
+    </div>
+    <div class="form-group"><label class="form-label">Couleur</label>
+      <div style="display:flex;align-items:center;gap:10px">
+        ${colorSwatches}
+        <span id="color-preview" style="width:32px;height:32px;border-radius:6px;background:${a?.couleur||COLORS[0]};display:inline-block;border:2px solid var(--border)"></span>
+      </div>
+      <input type="hidden" id="a-couleur" value="${a?.couleur||COLORS[0]}">
+    </div>`;
+
+  openModal(id ? "Modifier l'activité" : 'Ajouter une activité', body, `
+    <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+    <button class="btn btn-primary" onclick="saveActivite('${id||''}')">💾 Enregistrer</button>`);
+}
+
+function saveActivite(id) {
+  const nom = document.getElementById('a-nom').value.trim();
+  if (!nom) { alert('Nom obligatoire'); return; }
+  const data = {
+    nom,
+    description: document.getElementById('a-descr').value.trim(),
+    duree:    parseInt(document.getElementById('a-duree').value)||60,
+    capacite: parseInt(document.getElementById('a-capacite').value)||8,
+    couleur:  document.getElementById('a-couleur').value
+  };
+  if (id) {
+    const idx = state.activites.findIndex(x=>x.id===id);
+    state.activites[idx] = { ...state.activites[idx], ...data };
+  } else {
+    state.activites.push({ id: uid(), ...data });
+  }
+  persist(); closeModal(); navigate('activites');
+}
+
+function deleteActivite(id) {
+  if (!confirm('Supprimer cette activité ?')) return;
+  state.activites = state.activites.filter(x=>x.id!==id);
+  persist(); navigate('activites');
+}
+
+/* =====================================================
+   PAGE: PLANNING COLLECTIF
+   ===================================================== */
+let currentWeek = getWeekKey();
+
+function renderPlanningCollectif(el, actions) {
+  const conflicts = detectConflicts(currentWeek);
+  const conflictIds = new Set(conflicts.flatMap(c=>c.ids));
+
+  actions.innerHTML = `
+    <button class="btn btn-ghost btn-sm" onclick="exportPlanningPDF('collectif')">📄 PDF collectif</button>`;
+
+  const slots = getSlots(currentWeek);
+
+  let html = `
+  <div class="planning-nav">
+    <button class="btn btn-ghost btn-sm" onclick="changeWeek(-1)">← Semaine précédente</button>
+    <span class="week-label">📅 ${weekLabel(currentWeek)}</span>
+    <button class="btn btn-ghost btn-sm" onclick="changeWeek(1)">Semaine suivante →</button>
+    <button class="btn btn-accent btn-sm" onclick="changeWeek(0)">Aujourd'hui</button>
+  </div>`;
+
+  if (conflicts.length>0) {
+    html += `<div class="alert alert-danger">⚠️ ${conflicts.length} conflit(s) détecté(s) cette semaine. <a href="#" onclick="navigate('conflits')">Voir les détails</a></div>`;
+  }
+
+  if (state.activites.length===0 || state.enfants.length===0) {
+    html += `<div class="alert alert-info">ℹ️ Ajoutez d'abord des patients et des activités pour utiliser le planning.</div>`;
+  }
+
+  // Grille
+  html += `<div id="planning-print-area" class="planning-grid"><table class="planning-table">
+    <thead><tr>
+      <th class="time-col">Horaire</th>
+      ${JOURS.map(j=>`<th>${j}</th>`).join('')}
+    </tr></thead><tbody>`;
+
+  state.config.creneaux.forEach((cren, ci) => {
+    html += `<tr>
+      <td class="time-cell">${cren}</td>
+      ${[0,1,2,3,4].map(j => {
+        const daySlots = slots.filter(s=>s.jour===j&&s.creneauIdx===ci);
+        let cell = daySlots.map(s=>`
+          <div class="planning-slot ${conflictIds.has(s.id)?'conflict':''}" style="border-left:3px solid ${colorAct(s.activiteId)}">
+            <div class="slot-activity">${nomAct(s.activiteId)}</div>
+            <div class="slot-child">👤 ${nom(s.enfantId)}</div>
+            ${s.proId?`<div class="slot-pro">⚕️ ${nomPro(s.proId)}</div>`:''}
+            <button class="btn-remove no-print" onclick="removeSlot('${s.id}','${currentWeek}')">×</button>
+          </div>`).join('');
+        cell += `<button class="add-slot-btn no-print" onclick="modalAddSlot(${j},${ci})" title="Ajouter un créneau">＋</button>`;
+        return `<td>${cell}</td>`;
+      }).join('')}
+    </tr>`;
+  });
+
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+}
+
+function changeWeek(n) {
+  if (n===0) currentWeek = getWeekKey();
+  else currentWeek = addWeek(currentWeek, n);
+  navigate('planning-collectif');
+}
+
+function modalAddSlot(jour, creneauIdx) {
+  if (state.enfants.length===0) { alert('Ajoutez des patients d\'abord.'); return; }
+  if (state.activites.length===0) { alert('Ajoutez des activités d\'abord.'); return; }
+
+  const body = `
+    <div class="form-group"><label class="form-label">Patient *</label>
+      <select id="sl-enfant" class="form-control">
+        <option value="">— Sélectionner —</option>
+        ${state.enfants.map(e=>`<option value="${e.id}">${e.prenom} ${e.nom}</option>`).join('')}
+      </select></div>
+    <div class="form-group"><label class="form-label">Activité *</label>
+      <select id="sl-activite" class="form-control">
+        <option value="">— Sélectionner —</option>
+        ${state.activites.map(a=>`<option value="${a.id}">${a.nom}</option>`).join('')}
+      </select></div>
+    <div class="form-group"><label class="form-label">Professionnel référent</label>
+      <select id="sl-pro" class="form-control">
+        <option value="">— Aucun —</option>
+        ${state.professionnels.map(p=>`<option value="${p.id}">${p.prenom} ${p.nom} (${p.specialite||''})</option>`).join('')}
+      </select></div>
+    <div class="alert alert-info" style="margin-top:10px">
+      📅 ${JOURS[jour]} à ${state.config.creneaux[creneauIdx]} — semaine du ${new Date(currentWeek).toLocaleDateString('fr-FR')}
+    </div>`;
+
+  openModal('Ajouter un créneau', body, `
+    <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+    <button class="btn btn-primary" onclick="addSlot(${jour},${creneauIdx})">➕ Ajouter</button>`);
+}
+
+function addSlot(jour, creneauIdx) {
+  const enfantId  = document.getElementById('sl-enfant').value;
+  const activiteId= document.getElementById('sl-activite').value;
+  const proId     = document.getElementById('sl-pro').value;
+  if (!enfantId||!activiteId) { alert('Patient et activité obligatoires'); return; }
+
+  const slots = getSlots(currentWeek);
+  slots.push({ id:uid(), enfantId, activiteId, proId:proId||null, jour, creneauIdx });
+  setSlots(currentWeek, slots);
+  closeModal();
+  updateConflictBadge();
+  navigate('planning-collectif');
+}
+
+function removeSlot(id, wk) {
+  const slots = getSlots(wk).filter(s=>s.id!==id);
+  setSlots(wk, slots);
+  updateConflictBadge();
+  navigate(currentPage);
+}
+
+/* =====================================================
+   PAGE: PLANNING INDIVIDUEL
+   ===================================================== */
+let selectedEnfantId = null;
+
+function selectEnfantPlanning(id) {
+  selectedEnfantId = id;
+  navigate('planning-individuel');
+}
+
+function renderPlanningIndividuel(el, actions) {
+  if (state.enfants.length===0) {
+    el.innerHTML = `<div class="card"><div class="empty-state"><div class="empty-icon">👶</div><p>Aucun patient enregistré.</p></div></div>`;
+    return;
+  }
+
+  actions.innerHTML = selectedEnfantId
+    ? `<button class="btn btn-ghost btn-sm" onclick="exportPlanningPDF('individuel','${selectedEnfantId}')">📄 PDF individuel</button>`
+    : '';
+
+  let html = `
+  <div class="planning-nav" style="flex-wrap:wrap;gap:10px">
+    <div class="form-group" style="margin:0;display:flex;align-items:center;gap:8px">
+      <label class="form-label" style="margin:0;white-space:nowrap">Patient :</label>
+      <select class="form-control" style="width:200px" onchange="selectedEnfantId=this.value;navigate('planning-individuel')">
+        <option value="">— Sélectionner —</option>
+        ${state.enfants.map(e=>`<option value="${e.id}" ${selectedEnfantId===e.id?'selected':''}>${e.prenom} ${e.nom}</option>`).join('')}
+      </select>
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="changeWeekInd(-1)">← Préc.</button>
+    <span class="week-label">📅 ${weekLabel(currentWeek)}</span>
+    <button class="btn btn-ghost btn-sm" onclick="changeWeekInd(1)">Suiv. →</button>
+    <button class="btn btn-accent btn-sm" onclick="currentWeek=getWeekKey();navigate('planning-individuel')">Aujourd'hui</button>
+  </div>`;
+
+  if (!selectedEnfantId) {
+    html += `<div class="alert alert-info">Sélectionnez un patient pour voir son planning individuel.</div>`;
+    el.innerHTML = html; return;
+  }
+
+  const enfant = state.enfants.find(x=>x.id===selectedEnfantId);
+  const slots  = getSlots(currentWeek).filter(s=>s.enfantId===selectedEnfantId);
+  const conflicts = detectConflicts(currentWeek);
+  const conflictIds = new Set(conflicts.flatMap(c=>c.ids));
+
+  html += `
+  <div class="card" style="margin-bottom:14px;padding:12px 18px">
+    <strong>👤 ${enfant.prenom} ${enfant.nom}</strong>
+    ${enfant.ddn?`— ${age(enfant.ddn)}`:''}
+    ${enfant.dossier?`— Dossier n°${enfant.dossier}`:''}
+    ${enfant.infos?`<div style="font-size:12px;color:var(--text-m);margin-top:4px">${enfant.infos}</div>`:''}
+  </div>`;
+
+  if (slots.length===0) {
+    html += `<div class="alert alert-info">Aucun créneau pour ${enfant.prenom} cette semaine.</div>`;
+  }
+
+  html += `<div id="planning-ind-print" class="planning-grid"><table class="planning-table">
+    <thead><tr>
+      <th class="time-col">Horaire</th>
+      ${JOURS.map(j=>`<th>${j}</th>`).join('')}
+    </tr></thead><tbody>`;
+
+  state.config.creneaux.forEach((cren, ci) => {
+    html += `<tr>
+      <td class="time-cell">${cren}</td>
+      ${[0,1,2,3,4].map(j => {
+        const daySlots = slots.filter(s=>s.jour===j&&s.creneauIdx===ci);
+        return `<td>${daySlots.map(s=>`
+          <div class="planning-slot ${conflictIds.has(s.id)?'conflict':''}" style="border-left:3px solid ${colorAct(s.activiteId)}">
+            <div class="slot-activity">${nomAct(s.activiteId)}</div>
+            ${s.proId?`<div class="slot-pro">⚕️ ${nomPro(s.proId)}</div>`:''}
+            <button class="btn-remove no-print" onclick="removeSlot('${s.id}','${currentWeek}')">×</button>
+          </div>`).join('')}</td>`;
+      }).join('')}
+    </tr>`;
+  });
+
+  html += `</tbody></table></div>`;
+
+  // Récapitulatif
+  const groups = {};
+  slots.forEach(s => {
+    const k = nomAct(s.activiteId);
+    if (!groups[k]) groups[k]=[]; groups[k].push(s);
+  });
+  html += `<div class="card mt-2"><div class="card-title">📊 Récapitulatif de la semaine</div>`;
+  if (Object.keys(groups).length===0) {
+    html += `<p class="text-muted">Aucune activité cette semaine.</p>`;
+  } else {
+    html += `<table class="data-table"><thead><tr><th>Activité</th><th>Créneaux</th><th>Professionnel(s)</th></tr></thead><tbody>`;
+    Object.entries(groups).forEach(([act, ss]) => {
+      const pros = [...new Set(ss.filter(s=>s.proId).map(s=>nomPro(s.proId)))].join(', ')||'—';
+      html += `<tr><td>${act}</td><td>${ss.length} créneau(x)</td><td>${pros}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  }
+  html += `</div>`;
+
+  el.innerHTML = html;
+}
+
+function changeWeekInd(n) {
+  currentWeek = addWeek(currentWeek, n);
+  navigate('planning-individuel');
+}
+
+/* =====================================================
+   PAGE: CONFLITS
+   ===================================================== */
+function renderConflits(el, actions) {
+  const allC = getAllConflicts();
+  const total = allC.reduce((s,x)=>s+x.conflicts.length,0);
+
+  el.innerHTML = `
+  <div class="section-header">
+    <div>
+      <div class="section-title">⚠️ Conflits détectés</div>
+      <div class="section-subtitle">${total} conflit(s) sur l'ensemble des semaines planifiées</div>
+    </div>
+  </div>
+  ${total===0
+    ? `<div class="card"><div class="alert alert-success">✅ Aucun conflit détecté. Le planning est cohérent.</div></div>`
+    : allC.map(({wk,conflicts})=>`
+        <div class="card">
+          <div class="card-title">📅 ${weekLabel(wk)}</div>
+          <ul class="conflict-list">
+            ${conflicts.map(c=>`
+              <li>
+                <span class="conflict-icon">${c.type==='contrainte'?'🚫':'⏰'}</span>
+                <div>
+                  <span class="badge ${c.type==='contrainte'?'badge-warning':'badge-danger'}" style="margin-bottom:4px">
+                    ${c.type==='contrainte'?'Contrainte violée':'Chevauchement'}
+                  </span><br>
+                  ${c.msg}
+                </div>
+              </li>`).join('')}
+          </ul>
+        </div>`).join('')
+  }`;
+}
+
+/* =====================================================
+   PAGE: CONTRAINTES
+   ===================================================== */
+function renderContraintes(el, actions) {
+  actions.innerHTML = `<button class="btn btn-primary btn-sm" onclick="modalContrainte()">+ Ajouter une contrainte</button>`;
+
+  el.innerHTML = `
+  <div class="card" style="margin-bottom:14px">
+    <div class="card-title">ℹ️ À propos des contraintes</div>
+    <p style="font-size:13px;color:var(--text-m)">
+      Une contrainte indique que deux enfants/adolescents ne doivent <strong>pas être présents simultanément dans la même activité</strong>.
+      Si cette règle est violée dans le planning, une alerte rouge s'affiche automatiquement.
+    </p>
+  </div>`;
+
+  if (state.contraintes.length===0) {
+    el.innerHTML += `<div class="card"><div class="empty-state"><div class="empty-icon">🚫</div><p>Aucune contrainte configurée.</p></div></div>`;
+    return;
+  }
+
+  el.innerHTML += `
+  <div class="card" style="padding:0;overflow:hidden">
+    <table class="data-table">
+      <thead><tr><th>Patient A</th><th>Patient B</th><th>Motif</th><th>Actions</th></tr></thead>
+      <tbody>
+        ${state.contraintes.map(c=>`
+          <tr>
+            <td><strong>${nom(c.enfantA)}</strong></td>
+            <td><strong>${nom(c.enfantB)}</strong></td>
+            <td>${c.motif||'—'}</td>
+            <td><div class="actions">
+              <button class="btn btn-ghost btn-xs" onclick="modalContrainte('${c.id}')">✏️</button>
+              <button class="btn btn-danger btn-xs" onclick="deleteContrainte('${c.id}')">🗑️</button>
+            </div></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function modalContrainte(id=null) {
+  const c = id ? state.contraintes.find(x=>x.id===id) : null;
+  if (state.enfants.length<2) { alert('Il faut au moins 2 patients pour créer une contrainte.'); return; }
+  const body = `
+    <div class="form-group"><label class="form-label">Patient A *</label>
+      <select id="ct-a" class="form-control">
+        <option value="">— Sélectionner —</option>
+        ${state.enfants.map(e=>`<option value="${e.id}" ${c?.enfantA===e.id?'selected':''}>${e.prenom} ${e.nom}</option>`).join('')}
+      </select></div>
+    <div class="form-group"><label class="form-label">Patient B *</label>
+      <select id="ct-b" class="form-control">
+        <option value="">— Sélectionner —</option>
+        ${state.enfants.map(e=>`<option value="${e.id}" ${c?.enfantB===e.id?'selected':''}>${e.prenom} ${e.nom}</option>`).join('')}
+      </select></div>
+    <div class="form-group"><label class="form-label">Motif clinique</label>
+      <textarea id="ct-motif" class="form-control">${c?.motif||''}</textarea></div>`;
+
+  openModal('Contrainte de co-présence', body, `
+    <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+    <button class="btn btn-primary" onclick="saveContrainte('${id||''}')">💾 Enregistrer</button>`);
+}
+
+function saveContrainte(id) {
+  const a = document.getElementById('ct-a').value;
+  const b = document.getElementById('ct-b').value;
+  if (!a||!b) { alert('Sélectionnez deux patients'); return; }
+  if (a===b) { alert('Sélectionnez deux patients différents'); return; }
+  const data = { enfantA:a, enfantB:b, motif: document.getElementById('ct-motif').value.trim() };
+  if (id) {
+    const idx = state.contraintes.findIndex(x=>x.id===id);
+    state.contraintes[idx] = { ...state.contraintes[idx], ...data };
+  } else {
+    state.contraintes.push({ id:uid(), ...data });
+  }
+  persist(); closeModal(); updateConflictBadge(); navigate('contraintes');
+}
+
+function deleteContrainte(id) {
+  if (!confirm('Supprimer cette contrainte ?')) return;
+  state.contraintes = state.contraintes.filter(x=>x.id!==id);
+  persist(); navigate('contraintes');
+}
+
+/* =====================================================
+   PAGE: PROJETS DE SOINS
+   ===================================================== */
+let selectedSoinId = null;
+
+function selectEnfantSoin(id) {
+  selectedSoinId = id;
+  navigate('projets-soins');
+}
+
+function renderProjets(el, actions) {
+  if (state.enfants.length===0) {
+    el.innerHTML = `<div class="card"><div class="empty-state"><div class="empty-icon">📝</div><p>Aucun patient enregistré.</p></div></div>`;
+    return;
+  }
+
+  actions.innerHTML = selectedSoinId
+    ? `<button class="btn btn-ghost btn-sm" onclick="exportSoinPDF('${selectedSoinId}')">📄 PDF projet de soins</button>`
+    : '';
+
+  let html = `
+  <div style="display:flex;gap:18px">
+    <div style="width:230px;flex-shrink:0">
+      <div class="card" style="padding:10px">
+        <div class="card-title" style="font-size:12px">Liste des patients</div>
+        ${state.enfants.map(e=>`
+          <div onclick="selectedSoinId='${e.id}';navigate('projets-soins')"
+            style="padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;margin-bottom:2px;
+                   background:${selectedSoinId===e.id?'var(--primary)':'transparent'};
+                   color:${selectedSoinId===e.id?'#fff':'var(--text)'};
+                   transition:all .15s">
+            ${e.prenom} ${e.nom}
+            ${state.soins[e.id]?'<span style="float:right;font-size:11px;opacity:.7">📝</span>':''}
+          </div>`).join('')}
+      </div>
+    </div>
+    <div style="flex:1;min-width:0">`;
+
+  if (!selectedSoinId) {
+    html += `<div class="card"><div class="alert alert-info">Sélectionnez un patient pour accéder à son projet de soins.</div></div>`;
+  } else {
+    const enfant = state.enfants.find(x=>x.id===selectedSoinId);
+    const soin = state.soins[selectedSoinId] || { objectifs:[], activitesPrescrites:[], prosImpliques:[], observations:'', dateCreation: new Date().toISOString().slice(0,10) };
+
+    html += `
+    <div id="soin-print-area">
+      <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div>
+            <div style="font-size:18px;font-weight:800;color:var(--primary)">${enfant.prenom} ${enfant.nom}</div>
+            <div style="font-size:13px;color:var(--text-m)">
+              ${enfant.ddn?`Né(e) le ${new Date(enfant.ddn).toLocaleDateString('fr-FR')} (${age(enfant.ddn)})`:''} 
+              ${enfant.dossier?`— Dossier n°${enfant.dossier}`:''}
+            </div>
+            ${enfant.infos?`<div style="font-size:12px;color:var(--text-m);margin-top:4px">${enfant.infos}</div>`:''}
+          </div>
+          <div style="text-align:right;font-size:11px;color:var(--text-l)">
+            Projet de soins<br>Mis à jour : ${soin.dateMAJ||soin.dateCreation||'—'}
+          </div>
+        </div>
+      </div>
+
+      <!-- OBJECTIFS THÉRAPEUTIQUES -->
+      <div class="card">
+        <div class="card-title">🎯 Objectifs thérapeutiques
+          <button class="btn btn-primary btn-xs no-print" style="margin-left:auto" onclick="modalAddObjectif('${selectedSoinId}')">+ Ajouter</button>
+        </div>
+        ${(soin.objectifs||[]).length===0
+          ? '<p class="text-muted">Aucun objectif défini.</p>'
+          : (soin.objectifs||[]).map((o,i)=>`
+            <div class="objectif-item">
+              <div class="objectif-text">${o.texte}</div>
+              <span class="badge ${o.statut==='Atteint'?'badge-success':o.statut==='En cours'?'badge-warning':'badge-neutral'} objectif-statut">${o.statut||'En cours'}</span>
+              <button class="btn btn-danger btn-xs no-print" onclick="removeObjectif('${selectedSoinId}',${i})">×</button>
+            </div>`).join('')
+        }
+      </div>
+
+      <!-- ACTIVITÉS PRESCRITES -->
+      <div class="card">
+        <div class="card-title">🎨 Activités prescrites
+          <button class="btn btn-primary btn-xs no-print" style="margin-left:auto" onclick="modalAddActPrescrite('${selectedSoinId}')">+ Ajouter</button>
+        </div>
+        ${(soin.activitesPrescrites||[]).length===0
+          ? '<p class="text-muted">Aucune activité prescrite.</p>'
+          : `<table class="data-table"><thead><tr><th>Activité</th><th>Fréquence</th><th>Objectif lié</th><th class="no-print">Action</th></tr></thead><tbody>
+             ${(soin.activitesPrescrites||[]).map((a,i)=>`
+               <tr>
+                 <td>${a.activite}</td>
+                 <td>${a.freq||'—'}</td>
+                 <td>${a.objectif||'—'}</td>
+                 <td class="no-print"><button class="btn btn-danger btn-xs" onclick="removeActPrescrite('${selectedSoinId}',${i})">×</button></td>
+               </tr>`).join('')}
+             </tbody></table>`
+        }
+      </div>
+
+      <!-- PROFESSIONNELS IMPLIQUÉS -->
+      <div class="card">
+        <div class="card-title">👩‍⚕️ Professionnels impliqués
+          <button class="btn btn-primary btn-xs no-print" style="margin-left:auto" onclick="modalAddProSoin('${selectedSoinId}')">+ Ajouter</button>
+        </div>
+        ${(soin.prosImpliques||[]).length===0
+          ? '<p class="text-muted">Aucun professionnel renseigné.</p>'
+          : `<div style="display:flex;flex-wrap:wrap;gap:8px">
+             ${(soin.prosImpliques||[]).map((p,i)=>`
+               <span class="badge badge-primary" style="font-size:12px;padding:5px 10px">
+                 ${p}
+                 <button class="no-print" onclick="removeProSoin('${selectedSoinId}',${i})" style="background:none;border:none;color:inherit;margin-left:5px;cursor:pointer">×</button>
+               </span>`).join('')}
+             </div>`
+        }
+      </div>
+
+      <!-- OBSERVATIONS -->
+      <div class="card">
+        <div class="card-title">📋 Observations cliniques & notes d'évolution</div>
+        <textarea id="soin-obs-${selectedSoinId}" class="form-control" style="min-height:140px" 
+          onchange="saveSoinObs('${selectedSoinId}')">${soin.observations||''}</textarea>
+        <button class="btn btn-success btn-sm mt-2 no-print" onclick="saveSoinObs('${selectedSoinId}')">💾 Enregistrer les observations</button>
+      </div>
+    </div>`;
+  }
+
+  html += `</div></div>`;
+  el.innerHTML = html;
+}
+
+function getSoin(id) {
+  return state.soins[id] || { objectifs:[], activitesPrescrites:[], prosImpliques:[], observations:'', dateCreation: new Date().toISOString().slice(0,10) };
+}
+function saveSoin(id, data) {
+  state.soins[id] = { ...getSoin(id), ...data, dateMAJ: new Date().toISOString().slice(0,10) };
+  persist();
+}
+
+function saveSoinObs(id) {
+  const val = document.getElementById('soin-obs-'+id)?.value;
+  if (val!==undefined) { saveSoin(id, { observations: val }); showToast('Observations enregistrées'); }
+}
+
+function modalAddObjectif(id) {
+  openModal('Ajouter un objectif thérapeutique', `
+    <div class="form-group"><label class="form-label">Objectif *</label>
+      <textarea id="obj-texte" class="form-control" placeholder="Décrire l'objectif thérapeutique..."></textarea></div>
+    <div class="form-group"><label class="form-label">Statut</label>
+      <select id="obj-statut" class="form-control">
+        <option>À initier</option><option selected>En cours</option><option>Atteint</option><option>Suspendu</option>
+      </select></div>`, `
+    <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+    <button class="btn btn-primary" onclick="addObjectif('${id}')">➕ Ajouter</button>`);
+}
+
+function addObjectif(id) {
+  const texte = document.getElementById('obj-texte').value.trim();
+  if (!texte) { alert('Texte obligatoire'); return; }
+  const soin = getSoin(id);
+  soin.objectifs.push({ texte, statut: document.getElementById('obj-statut').value });
+  saveSoin(id, soin);
+  closeModal(); navigate('projets-soins');
+}
+
+function removeObjectif(id, i) {
+  const soin = getSoin(id);
+  soin.objectifs.splice(i,1);
+  saveSoin(id, soin); navigate('projets-soins');
+}
+
+function modalAddActPrescrite(id) {
+  openModal('Activité prescrite', `
+    <div class="form-group"><label class="form-label">Activité *</label>
+      <select id="ap-act" class="form-control">
+        <option value="">— Sélectionner ou saisir —</option>
+        ${state.activites.map(a=>`<option value="${a.nom}">${a.nom}</option>`).join('')}
+        <option value="_autre">Autre (saisir manuellement)</option>
+      </select></div>
+    <div id="ap-autre-zone" class="form-group hidden">
+      <label class="form-label">Nom de l'activité</label>
+      <input id="ap-autre" class="form-control"></div>
+    <div class="form-group"><label class="form-label">Fréquence</label>
+      <input id="ap-freq" class="form-control" placeholder="ex: 2x/semaine"></div>
+    <div class="form-group"><label class="form-label">Objectif thérapeutique lié</label>
+      <input id="ap-obj" class="form-control" placeholder="Résumé de l'objectif"></div>`,`
+    <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+    <button class="btn btn-primary" onclick="addActPrescrite('${id}')">➕ Ajouter</button>`);
+  document.getElementById('ap-act').addEventListener('change', function(){
+    document.getElementById('ap-autre-zone').classList.toggle('hidden', this.value!=='_autre');
+  });
+}
+
+function addActPrescrite(id) {
+  let activite = document.getElementById('ap-act').value;
+  if (activite==='_autre') activite = document.getElementById('ap-autre').value.trim();
+  if (!activite) { alert('Activité obligatoire'); return; }
+  const soin = getSoin(id);
+  soin.activitesPrescrites.push({
+    activite,
+    freq:     document.getElementById('ap-freq').value.trim(),
+    objectif: document.getElementById('ap-obj').value.trim()
+  });
+  saveSoin(id, soin); closeModal(); navigate('projets-soins');
+}
+
+function removeActPrescrite(id, i) {
+  const soin = getSoin(id);
+  soin.activitesPrescrites.splice(i,1);
+  saveSoin(id, soin); navigate('projets-soins');
+}
+
+function modalAddProSoin(id) {
+  openModal('Ajouter un professionnel', `
+    <div class="form-group"><label class="form-label">Professionnel *</label>
+      <select id="ps-pro" class="form-control">
+        <option value="">— Sélectionner —</option>
+        ${state.professionnels.map(p=>`<option value="${p.prenom} ${p.nom} (${p.specialite||''})">${p.prenom} ${p.nom} — ${p.specialite||''}</option>`).join('')}
+      </select></div>`,`
+    <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+    <button class="btn btn-primary" onclick="addProSoin('${id}')">➕ Ajouter</button>`);
+}
+
+function addProSoin(id) {
+  const val = document.getElementById('ps-pro').value;
+  if (!val) { alert('Sélectionnez un professionnel'); return; }
+  const soin = getSoin(id);
+  if (!soin.prosImpliques.includes(val)) soin.prosImpliques.push(val);
+  saveSoin(id, soin); closeModal(); navigate('projets-soins');
+}
+
+function removeProSoin(id, i) {
+  const soin = getSoin(id);
+  soin.prosImpliques.splice(i,1);
+  saveSoin(id, soin); navigate('projets-soins');
+}
+
+/* =====================================================
+   PAGE: IMPORT / EXPORT
+   ===================================================== */
+function renderImportExport(el, actions) {
+  el.innerHTML = `
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">
+    <div class="card">
+      <div class="card-title">📥 Export des données</div>
+      <p style="font-size:13px;color:var(--text-m);margin-bottom:14px">
+        Exportez l'ensemble des données (patients, professionnels, activités, planning, projets de soins, contraintes) dans un fichier CSV structuré.
+      </p>
+      <button class="btn btn-success w-full" onclick="exportCSV()">⬇️ Télécharger le fichier CSV</button>
+      <div class="mt-2">
+        <button class="btn btn-ghost w-full" onclick="exportJSON()">⬇️ Export JSON (sauvegarde complète)</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📤 Import des données</div>
+      <p style="font-size:13px;color:var(--text-m);margin-bottom:14px">
+        Importez un fichier CSV ou JSON précédemment exporté pour restaurer les données.
+        <strong>Attention :</strong> l'import <em>remplace</em> les données actuelles.
+      </p>
+      <div class="alert alert-warning">⚠️ L'import écrasera toutes les données en mémoire. Faites un export préalable si nécessaire.</div>
+      <div class="form-group mt-2">
+        <label class="form-label">Sélectionner un fichier CSV ou JSON</label>
+        <input type="file" id="import-file" accept=".csv,.json" class="form-control">
+      </div>
+      <button class="btn btn-warning w-full" onclick="importData()">⬆️ Importer les données</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">🗑️ Réinitialisation</div>
+      <p style="font-size:13px;color:var(--text-m);margin-bottom:14px">Effacer toutes les données locales. Action irréversible.</p>
+      <button class="btn btn-danger" onclick="resetAllData()">⚠️ Réinitialiser toutes les données</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">ℹ️ Informations sur le stockage</div>
+      <div style="font-size:13px">
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border)">
+          <span>Patients</span><strong>${state.enfants.length}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border)">
+          <span>Professionnels</span><strong>${state.professionnels.length}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border)">
+          <span>Activités</span><strong>${state.activites.length}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border)">
+          <span>Semaines planifiées</span><strong>${Object.keys(state.planning).length}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border)">
+          <span>Projets de soins</span><strong>${Object.keys(state.soins).length}</strong>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:5px 0">
+          <span>Contraintes</span><strong>${state.contraintes.length}</strong>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ---- Export CSV ----
+function exportCSV() {
+  const rows = [];
+  // Section: ENFANTS
+  rows.push(['# SECTION', 'ENFANTS']);
+  rows.push(['id','nom','prenom','ddn','dossier','infos']);
+  state.enfants.forEach(e => rows.push([e.id,e.nom,e.prenom,e.ddn||'',e.dossier||'',e.infos||'']));
+
+  rows.push([]);
+  rows.push(['# SECTION', 'PROFESSIONNELS']);
+  rows.push(['id','nom','prenom','specialite','contact','notes']);
+  state.professionnels.forEach(p => rows.push([p.id,p.nom,p.prenom,p.specialite||'',p.contact||'',p.notes||'']));
+
+  rows.push([]);
+  rows.push(['# SECTION', 'ACTIVITES']);
+  rows.push(['id','nom','description','duree','capacite','couleur']);
+  state.activites.forEach(a => rows.push([a.id,a.nom,a.description||'',a.duree||'',a.capacite||'',a.couleur||'']));
+
+  rows.push([]);
+  rows.push(['# SECTION', 'PLANNING']);
+  rows.push(['semaine','id','enfantId','activiteId','proId','jour','creneauIdx']);
+  Object.entries(state.planning).forEach(([wk,slots]) => {
+    slots.forEach(s => rows.push([wk,s.id,s.enfantId,s.activiteId,s.proId||'',s.jour,s.creneauIdx]));
+  });
+
+  rows.push([]);
+  rows.push(['# SECTION', 'CONTRAINTES']);
+  rows.push(['id','enfantA','enfantB','motif']);
+  state.contraintes.forEach(c => rows.push([c.id,c.enfantA,c.enfantB,c.motif||'']));
+
+  rows.push([]);
+  rows.push(['# SECTION', 'SOINS']);
+  rows.push(['enfantId','type','valeur1','valeur2','valeur3','valeur4']);
+  Object.entries(state.soins).forEach(([eid,soin]) => {
+    (soin.objectifs||[]).forEach(o => rows.push([eid,'objectif',o.texte,o.statut,'','']));
+    (soin.activitesPrescrites||[]).forEach(a => rows.push([eid,'actPrescrite',a.activite,a.freq||'',a.objectif||'','']));
+    (soin.prosImpliques||[]).forEach(p => rows.push([eid,'proImplique',p,'','','']));
+    if (soin.observations) rows.push([eid,'observations',soin.observations,'','','']);
+    if (soin.dateCreation) rows.push([eid,'dateCreation',soin.dateCreation,'','','']);
+    if (soin.dateMAJ)      rows.push([eid,'dateMAJ',soin.dateMAJ,'','','']);
+  });
+
+  rows.push([]);
+  rows.push(['# SECTION', 'CONFIG']);
+  rows.push(['creneaux', state.config.creneaux.join('|')]);
+
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\uFEFF'+csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `hdj_planning_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click(); URL.revokeObjectURL(url);
+  showToast('Export CSV téléchargé');
+}
+
+// ---- Export JSON ----
+function exportJSON() {
+  const data = JSON.stringify({ enfants:state.enfants, professionnels:state.professionnels, activites:state.activites, planning:state.planning, soins:state.soins, contraintes:state.contraintes, config:state.config }, null, 2);
+  const blob = new Blob([data], { type:'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href=url; a.download=`hdj_backup_${new Date().toISOString().slice(0,10)}.json`;
+  a.click(); URL.revokeObjectURL(url);
+  showToast('Export JSON téléchargé');
+}
+
+// ---- Import ----
+function importData() {
+  const file = document.getElementById('import-file').files[0];
+  if (!file) { alert('Sélectionnez un fichier'); return; }
+  if (!confirm('Importer ce fichier ? Les données actuelles seront remplacées.')) return;
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    if (file.name.endsWith('.json')) importJSON(text);
+    else importCSV(text);
+  };
+  reader.readAsText(file);
+}
+
+function importJSON(text) {
+  try {
+    const d = JSON.parse(text);
+    state.enfants        = d.enfants        || [];
+    state.professionnels = d.professionnels || [];
+    state.activites      = d.activites      || [];
+    state.planning       = d.planning       || {};
+    state.soins          = d.soins          || {};
+    state.contraintes    = d.contraintes    || [];
+    if (d.config) state.config = d.config;
+    persist(); updateConflictBadge();
+    showToast('Import JSON réussi !'); navigate('dashboard');
+  } catch { alert('Fichier JSON invalide'); }
+}
+
+function importCSV(text) {
+  // Parse CSV en lignes brutes
+  const lines = text.split('\n').map(l => {
+    // Parser les cellules CSV
+    const cells = [];
+    let cur = '', inQ = false;
+    for (let i=0;i<l.length;i++) {
+      const c=l[i];
+      if (c==='"') { if (inQ && l[i+1]==='"') { cur+='"'; i++; } else inQ=!inQ; }
+      else if (c===','&&!inQ) { cells.push(cur); cur=''; }
+      else cur+=c;
+    }
+    cells.push(cur);
+    return cells;
+  });
+
+  let section = null;
+  const newState = { enfants:[], professionnels:[], activites:[], planning:{}, soins:{}, contraintes:[], config:{creneaux:state.config.creneaux} };
+
+  lines.forEach(row => {
+    if (!row[0]?.trim()) return;
+    if (row[0]==='# SECTION') { section=row[1]; return; }
+    if (row[0].startsWith('id')||row[0].startsWith('semaine')||row[0].startsWith('enfantId')||row[0].startsWith('creneaux')) return; // headers
+
+    switch(section) {
+      case 'ENFANTS':
+        newState.enfants.push({id:row[0],nom:row[1],prenom:row[2],ddn:row[3],dossier:row[4],infos:row[5]}); break;
+      case 'PROFESSIONNELS':
+        newState.professionnels.push({id:row[0],nom:row[1],prenom:row[2],specialite:row[3],contact:row[4],notes:row[5]}); break;
+      case 'ACTIVITES':
+        newState.activites.push({id:row[0],nom:row[1],description:row[2],duree:parseInt(row[3])||60,capacite:parseInt(row[4])||8,couleur:row[5]||COLORS[0]}); break;
+      case 'PLANNING': {
+        const wk=row[0];
+        if (!newState.planning[wk]) newState.planning[wk]=[];
+        newState.planning[wk].push({id:row[1],enfantId:row[2],activiteId:row[3],proId:row[4]||null,jour:parseInt(row[5]),creneauIdx:parseInt(row[6])});
+        break;
+      }
+      case 'CONTRAINTES':
+        newState.contraintes.push({id:row[0],enfantA:row[1],enfantB:row[2],motif:row[3]}); break;
+      case 'SOINS': {
+        const eid=row[0];
+        if (!newState.soins[eid]) newState.soins[eid]={objectifs:[],activitesPrescrites:[],prosImpliques:[],observations:''};
+        if (row[1]==='objectif')    newState.soins[eid].objectifs.push({texte:row[2],statut:row[3]});
+        if (row[1]==='actPrescrite') newState.soins[eid].activitesPrescrites.push({activite:row[2],freq:row[3],objectif:row[4]});
+        if (row[1]==='proImplique') newState.soins[eid].prosImpliques.push(row[2]);
+        if (row[1]==='observations') newState.soins[eid].observations=row[2];
+        if (row[1]==='dateCreation') newState.soins[eid].dateCreation=row[2];
+        if (row[1]==='dateMAJ')      newState.soins[eid].dateMAJ=row[2];
+        break;
+      }
+      case 'CONFIG':
+        if (row[0]==='creneaux') newState.config.creneaux=row[1].split('|'); break;
+    }
+  });
+
+  state.enfants=newState.enfants; state.professionnels=newState.professionnels;
+  state.activites=newState.activites; state.planning=newState.planning;
+  state.soins=newState.soins; state.contraintes=newState.contraintes;
+  state.config=newState.config;
+  persist(); updateConflictBadge();
+  showToast('Import CSV réussi !'); navigate('dashboard');
+}
+
+function resetAllData() {
+  if (!confirm('ATTENTION : toutes les données seront effacées définitivement. Confirmer ?')) return;
+  if (!confirm('Dernière confirmation : effacer toutes les données ?')) return;
+  Object.values(STORAGE_KEYS).forEach(k => localStorage.removeItem(k));
+  state = {
+    enfants:[], professionnels:[], activites:[],
+    planning:{}, soins:{}, contraintes:[],
+    config:{ creneaux:['08:00','08:30','09:00','09:30','10:00','10:30','11:00','11:30','13:30','14:00','14:30','15:00','15:30','16:00','16:30'] }
+  };
+  updateConflictBadge(); showToast('Données réinitialisées'); navigate('dashboard');
+}
+
+/* =====================================================
+   EXPORT PDF
+   ===================================================== */
+function exportPlanningPDF(type, enfantId) {
+  let areaId, filename;
+  if (type==='collectif') {
+    areaId = 'planning-print-area';
+    filename = `planning_collectif_${currentWeek}.pdf`;
+  } else {
+    areaId = 'planning-ind-print';
+    filename = `planning_${nom(enfantId).replace(' ','_')}_${currentWeek}.pdf`;
+  }
+  const area = document.getElementById(areaId);
+  if (!area) { alert('Aucun planning à exporter.'); return; }
+  showToast('Génération du PDF...');
+  html2canvas(area, { scale: 2, useCORS:true, backgroundColor:'#fff' }).then(canvas => {
+    const { jsPDF } = window.jspdf;
+    const pdf  = new jsPDF({ orientation:'landscape', unit:'mm', format:'a4' });
+    const w    = pdf.internal.pageSize.getWidth();
+    const h    = (canvas.height*w)/canvas.width;
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, w, h);
+    if (type==='collectif') {
+      pdf.setFontSize(10);
+      pdf.text(`Planning collectif — ${weekLabel(currentWeek)}`, 10, h+8);
+    }
+    pdf.save(filename);
+    showToast('PDF téléchargé !');
+  });
+}
+
+function exportSoinPDF(enfantId) {
+  const area = document.getElementById('soin-print-area');
+  if (!area) { alert('Aucun projet de soins à exporter.'); return; }
+  const enfant = state.enfants.find(x=>x.id===enfantId);
+  showToast('Génération du PDF...');
+  html2canvas(area, { scale:2, backgroundColor:'#fff' }).then(canvas => {
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+    const w   = pdf.internal.pageSize.getWidth() - 20;
+    const h   = (canvas.height*w)/canvas.width;
+    // Header
+    pdf.setFontSize(14); pdf.setTextColor(26,79,138);
+    pdf.text('PROJET DE SOINS INDIVIDUEL — HÔPITAL DE JOUR', 10, 12);
+    pdf.setFontSize(11); pdf.setTextColor(60,60,60);
+    pdf.text(`Patient : ${enfant?.prenom||''} ${enfant?.nom||''}   |   Date : ${new Date().toLocaleDateString('fr-FR')}`, 10, 20);
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 26, w, Math.min(h, pdf.internal.pageSize.getHeight()-36));
+    pdf.save(`projet_soins_${(enfant?.nom||'patient').replace(' ','_')}.pdf`);
+    showToast('PDF téléchargé !');
+  });
+}
+
+/* =====================================================
+   TOAST
+   ===================================================== */
+function showToast(msg, type='success') {
+  const t = document.createElement('div');
+  t.style.cssText = `
+    position:fixed;bottom:24px;right:24px;z-index:9999;
+    background:${type==='success'?'#16a34a':'#dc2626'};
+    color:#fff;padding:10px 18px;border-radius:8px;
+    font-size:13px;font-weight:600;box-shadow:0 4px 16px rgba(0,0,0,.2);
+    animation:fadeIn .2s ease;`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 3000);
+}
+
+/* =====================================================
+   INIT
+   ===================================================== */
+updateConflictBadge();
+navigate('dashboard');
+</script>
+</body>
+</html>
