@@ -385,7 +385,7 @@ textarea.form-control { resize: vertical; min-height: 80px; }
 
       <div class="nav-section">Référentiels</div>
       <div class="nav-item" data-page="enfants" onclick="navigate('enfants')">
-        <span class="icon">👶</span> Enfants / Ados
+        <span class="icon">🧒</span> Enfants / Ados
       </div>
       <div class="nav-item" data-page="professionnels" onclick="navigate('professionnels')">
         <span class="icon">👩‍⚕️</span> Professionnels
@@ -696,7 +696,7 @@ function renderDashboard(el) {
   el.innerHTML = `
   <div class="stats-row">
     <div class="stat-card">
-      <span class="stat-icon">👶</span>
+      <span class="stat-icon">🧒</span>
       <div class="stat-num">${state.enfants.length}</div>
       <div class="stat-label">Enfants / Adolescents</div>
     </div>
@@ -738,7 +738,7 @@ function renderDashboard(el) {
     </div>
 
     <div class="card">
-      <div class="card-title">👶 Derniers patients ajoutés</div>
+      <div class="card-title">🧒 Derniers patients ajoutés</div>
       ${state.enfants.length===0
         ? '<p class="text-muted">Aucun patient enregistré.</p>'
         : state.enfants.slice(-5).reverse().map(e=>`
@@ -769,7 +769,7 @@ function renderEnfants(el, actions) {
   actions.innerHTML = `<button class="btn btn-primary btn-sm" onclick="modalEnfant()">+ Ajouter un patient</button>`;
 
   if (state.enfants.length===0) {
-    el.innerHTML = `<div class="card"><div class="empty-state"><div class="empty-icon">👶</div><p>Aucun patient enregistré.<br>Cliquez sur "+ Ajouter un patient" pour commencer.</p></div></div>`;
+    el.innerHTML = `<div class="card"><div class="empty-state"><div class="empty-icon">🧒</div><p>Aucun patient enregistré.<br>Cliquez sur "+ Ajouter un patient" pour commencer.</p></div></div>`;
     return;
   }
 
@@ -1096,9 +1096,8 @@ function modalAddSlot(jour, creneauIdx) {
   if (state.activites.length===0) { alert('Ajoutez des activités d\'abord.'); return; }
 
   const body = `
-    <div class="form-group"><label class="form-label">Patient *</label>
-      <select id="sl-enfant" class="form-control">
-        <option value="">— Sélectionner —</option>
+    <div class="form-group"><label class="form-label">Patient(s) * <small style="color:var(--text-m);font-weight:normal">(Ctrl+clic pour sélectionner plusieurs)</small></label>
+      <select id="sl-enfant" class="form-control" multiple size="${Math.min(state.enfants.length, 6)}" style="height:auto">
         ${state.enfants.map(e=>`<option value="${e.id}">${e.prenom} ${e.nom}</option>`).join('')}
       </select></div>
     <div class="form-group"><label class="form-label">Activité *</label>
@@ -1121,13 +1120,16 @@ function modalAddSlot(jour, creneauIdx) {
 }
 
 function addSlot(jour, creneauIdx) {
-  const enfantId  = document.getElementById('sl-enfant').value;
+  const sel = document.getElementById('sl-enfant');
+  const enfantIds = Array.from(sel.selectedOptions).map(o=>o.value).filter(Boolean);
   const activiteId= document.getElementById('sl-activite').value;
   const proId     = document.getElementById('sl-pro').value;
-  if (!enfantId||!activiteId) { alert('Patient et activité obligatoires'); return; }
+  if (!enfantIds.length||!activiteId) { alert('Sélectionnez au moins un patient et une activité'); return; }
 
   const slots = getSlots(currentWeek);
-  slots.push({ id:uid(), enfantId, activiteId, proId:proId||null, jour, creneauIdx });
+  enfantIds.forEach(enfantId => {
+    slots.push({ id:uid(), enfantId, activiteId, proId:proId||null, jour, creneauIdx });
+  });
   setSlots(currentWeek, slots);
   closeModal();
   updateConflictBadge();
