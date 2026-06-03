@@ -1068,13 +1068,27 @@ function renderPlanningCollectif(el, actions) {
       <td class="time-cell">${cren}</td>
       ${[0,1,2,3,4].map(j => {
         const daySlots = slots.filter(s=>s.jour===j&&s.creneauIdx===ci);
-        let cell = daySlots.map(s=>`
-          <div class="planning-slot ${conflictIds.has(s.id)?'conflict':''}" style="border-left:3px solid ${colorAct(s.activiteId)}">
-            <div class="slot-activity">${nomAct(s.activiteId)}</div>
-            <div class="slot-child">👤 ${nom(s.enfantId)}</div>
-            ${s.proId?`<div class="slot-pro">⚕️ ${nomPro(s.proId)}</div>`:''}
-            <button class="btn-remove no-print" onclick="removeSlot('${s.id}','${currentWeek}')">×</button>
-          </div>`).join('');
+        // Regrouper par activité + professionnel
+        const groups = [];
+        daySlots.forEach(s => {
+          const key = s.activiteId + '|' + (s.proId||'');
+          let g = groups.find(g=>g.key===key);
+          if (!g) { g={key, activiteId:s.activiteId, proId:s.proId, slots:[]}; groups.push(g); }
+          g.slots.push(s);
+        });
+        let cell = groups.map(g => {
+          const hasConflict = g.slots.some(s=>conflictIds.has(s.id));
+          const children = g.slots.map(s=>`
+            <div class="slot-child">👤 ${nom(s.enfantId)}
+              <button class="btn-remove no-print" onclick="removeSlot('${s.id}','${currentWeek}')" style="float:right;margin-left:4px">×</button>
+            </div>`).join('');
+          return `
+          <div class="planning-slot ${hasConflict?'conflict':''}" style="border-left:3px solid ${colorAct(g.activiteId)}">
+            <div class="slot-activity">${nomAct(g.activiteId)}</div>
+            ${children}
+            ${g.proId?`<div class="slot-pro">⚕️ ${nomPro(g.proId)}</div>`:''}
+          </div>`;
+        }).join('');
         cell += `<button class="add-slot-btn no-print" onclick="modalAddSlot(${j},${ci})" title="Ajouter un créneau">＋</button>`;
         return `<td>${cell}</td>`;
       }).join('')}
