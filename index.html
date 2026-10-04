@@ -102,6 +102,16 @@ table.agenda td.cell{padding:5px;background:#fff;position:relative;min-height:80
 .add-s{display:block;width:100%;margin-top:4px;border:1px dashed #c9d2dd;background:transparent;color:#8794a3;border-radius:6px;cursor:pointer;font-size:.8rem;padding:2px}
 .add-s:hover{background:#f1f5fa;color:var(--accent)}
 .stale{background:#fff1d6;border:1px solid #f0c674}
+tr.meal-row th.slot{background:#eef1f5}
+td.meal-cell{background:#f8f9fb!important}
+.meal{border-left:5px solid #7a8899;background:#eceff3;border-radius:6px;padding:5px 7px;font-size:.82rem;cursor:pointer}
+.meal:hover{background:#e1e6ec}
+.meal.short{border-left-color:var(--danger);background:#fdecea}
+.meal.empty{color:var(--muted);font-style:italic;border-left-color:#c9d2dd;background:transparent}
+.free-line{font-size:.75rem;color:var(--ok);margin-top:4px;padding-top:3px;border-top:1px dotted #c9d2dd}
+.free-note{font-size:.78rem;color:var(--ok);font-weight:600;padding:3px 2px}
+.chip-free{--c:#2e7d4f}
+table.free-grid th,table.free-grid td{text-align:left;border:1px solid var(--line)}
 /* Fenêtre modale */
 dialog{border:none;border-radius:12px;padding:0;max-width:760px;width:94vw;box-shadow:0 12px 40px rgba(0,0,0,.25)}
 dialog::backdrop{background:rgba(20,30,45,.45)}
@@ -172,7 +182,8 @@ const TABS=[['accueil','Accueil'],['parametres','1. Paramètres'],['professionne
 /* ---------- État ---------- */
 function defaultState(){
   return {
-    settings:{openDays:['Lun','Mar','Mer','Jeu','Ven'],maxPerDay:2,defaultMin:2,iterations:60,csvSep:';',persist:false},
+    settings:{openDays:['Lun','Mar','Mer','Jeu','Ven'],maxPerDay:2,defaultMin:2,iterations:60,csvSep:';',persist:false,
+      meal:{enabled:true,start:'12:15',end:'13:45',ratio:6,minPros:1}},
     slots:[
       {id:'M1',label:'Matin 1',start:'09:30',end:'10:45'},
       {id:'M2',label:'Matin 2',start:'11:00',end:'12:15'},
@@ -189,8 +200,9 @@ function defaultState(){
 let S=defaultState();
 let currentTab='accueil';
 const editing={pros:null,rooms:null,activities:null,persons:null};
-const UI={filter:'all',showParts:true,personSearch:''};
+const UI={filter:'all',showParts:true,showFree:false,personSearch:''};
 let draft=null;          // atelier en cours de modification
+let mealDraft=null;      // repas en cours de modification
 let pendingImport=null;  // import en attente de confirmation
 
 /* ---------- Utilitaires ---------- */
@@ -219,6 +231,46 @@ function effMin(a,st=S){return (a&&a.min!=null&&a.min!=='')?Number(a.min):st.set
 function proAvailable(st,code,ds){const p=st.pros.find(x=>x.code===code);if(!p)return false;const[d,s]=ds.split('|');return (p.avail[d]||[]).includes(s);}
 function compatibleRooms(st,a){return st.rooms.filter(r=>r.capacity>0&&(!r.families.length||r.families.includes(a.family)));}
 function sessCap(st,s){const a=st.activities.find(x=>x.name===s.activity),r=st.rooms.find(x=>x.name===s.room);return Math.min(a?a.capacity:99,r?r.capacity:99);}
+const isYes=v=>['oui','o','yes','1','x','vrai'].includes(norm(v));
+
+/* ---------- Repas du midi ---------- */
+function mealOn(st=S){return !!(st.settings.meal&&st.settings.meal.enabled);}
+// Créneaux d'ateliers qui chevauchent l'horaire du repas
+function mealOverlap(st=S){if(!mealOn(st))return new Set();const m=st.settings.meal;return new Set(st.slots.filter(s=>s.start<m.end&&s.end>m.start).map(s=>s.id));}
+function eatsOn(st,p,d){return mealOn(st)&&(p.meals||[]).includes(d)&&p.days.includes(d);}
+function mealBlocks(st,p,d,s){return eatsOn(st,p,d)&&mealOverlap(st).has(s);}
+function eatersOn(st,d){return st.persons.filter(p=>eatsOn(st,p,d)).map(p=>p.code).sort(byCode);}
+function mealNeed(st,n){if(!n)return 0;const m=st.settings.meal;return Math.max(m.minPros|0,Math.ceil(n/Math.max(1,m.ratio|0)));}
+function proBusyOverlap(st,plan,code,d){const mo=mealOverlap(st);return plan.sessions.find(s=>s.pro===code&&s.day===d&&mo.has(s.slot));}
+function mealCandidates(st,plan,d){return st.pros.filter(p=>(p.mealDays||[]).includes(d)&&!proBusyOverlap(st,plan,p.code,d));}
+// Mobilisation des professionnels au repas : repas verrouillés conservés, puis rotation équitable sur la semaine
+function assignMeals(st,plan,prev){
+  const meals={};if(!mealOn(st))return meals;const count=new Map();const days=openDays(st);
+  for(const d of days){const o=prev&&prev[d];if(o&&o.locked){meals[d]={pros:o.pros.filter(c=>st.pros.some(p=>p.code===c)),locked:true};meals[d].pros.forEach(c=>count.set(c,(count.get(c)||0)+1));}}
+  for(const d of days){if(meals[d])continue;
+    const need=mealNeed(st,eatersOn(st,d).length);
+    const load=c=>plan.sessions.filter(s=>s.pro===c&&s.day===d).length;
+    const cands=mealCandidates(st,plan,d).map(p=>p.code).sort((a,b)=>(count.get(a)||0)-(count.get(b)||0)||load(a)-load(b)||byCode(a,b));
+    const pros=cands.slice(0,need);pros.forEach(x=>count.set(x,(count.get(x)||0)+1));meals[d]={pros,locked:false};}
+  return meals;
+}
+function ensureMeals(st){if(st.plan&&!st.plan.meals)st.plan.meals=assignMeals(st,st.plan,null);}
+function mealInfo(st,d){const eaters=eatersOn(st,d);const need=mealNeed(st,eaters.length);const m=(st.plan&&st.plan.meals&&st.plan.meals[d])||{pros:[],locked:false};
+  return {eaters,need,pros:m.pros,locked:!!m.locked,missing:Math.max(0,need-m.pros.length)};}
+/* ---------- Professionnels disponibles non affectés ---------- */
+function freePros(st,plan,d,s){const mo=mealOverlap(st);const m=plan.meals&&plan.meals[d];
+  return st.pros.filter(p=>(p.avail[d]||[]).includes(s)&&!plan.sessions.some(x=>x.pro===p.code&&x.day===d&&x.slot===s)&&!(mo.has(s)&&m&&m.pros.includes(p.code))).map(p=>p.code);}
+function freeProsMeal(st,plan,d){if(!mealOn(st))return [];const m=(plan.meals&&plan.meals[d])||{pros:[]};
+  return st.pros.filter(p=>(p.mealDays||[]).includes(d)&&!m.pros.includes(p.code)&&!proBusyOverlap(st,plan,p.code,d)).map(p=>p.code);}
+function agendaRowsDef(st=S){const r=sortedSlots(st).map(s=>({type:'slot',s,start:s.start}));if(mealOn(st))r.push({type:'meal',start:st.settings.meal.start});return r.sort((a,b)=>a.start.localeCompare(b.start));}
+function proFreeSummary(st,code){
+  const p=st.pros.find(x=>x.code===code);const days=openDays(st),slots=sortedSlots(st);let av=0,nFree=0;const parts=[];
+  for(const d of days){const fl=[];for(const s of slots)if((p.avail[d]||[]).includes(s.id)){av++;if(freePros(st,st.plan,d,s.id).includes(code)){fl.push(s.id);nFree++;}}if(fl.length)parts.push(`${d} ${fl.join(', ')}`);}
+  const mealAv=days.filter(d=>mealOn(st)&&(p.mealDays||[]).includes(d));
+  const mealMob=days.filter(d=>(st.plan.meals&&st.plan.meals[d]&&st.plan.meals[d].pros||[]).includes(code));
+  const mealFree=days.filter(d=>freeProsMeal(st,st.plan,d).includes(code));
+  return {av,nFree,parts,n:st.plan.sessions.filter(s=>s.pro===code).length,mealAv,mealMob,mealFree};
+}
 let toastTimer=null;
 function toast(msg,type){const t=$('#toast');t.textContent=msg;t.className=type==='err'?'err':'';t.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.hidden=true,type==='err'?6000:3500);}
 
@@ -240,7 +292,8 @@ function planChanged(){persist();}
 
 /* ---------- Propagation des renommages / suppressions ---------- */
 function renameFamily(o,n){S.activities.forEach(a=>{if(a.family===o)a.family=n;});S.rooms.forEach(r=>r.families=r.families.map(f=>f===o?n:f));S.persons.forEach(p=>p.needs=p.needs.map(f=>f===o?n:f));if(S.plan)S.plan.sessions.forEach(s=>{if(s.family===o)s.family=n;});}
-function renamePro(o,n){S.activities.forEach(a=>a.pros=a.pros.map(c=>c===o?n:c));if(S.plan)S.plan.sessions.forEach(s=>{if(s.pro===o)s.pro=n;});}
+function renamePro(o,n){S.activities.forEach(a=>a.pros=a.pros.map(c=>c===o?n:c));if(S.plan){S.plan.sessions.forEach(s=>{if(s.pro===o)s.pro=n;});
+  if(S.plan.meals)for(const d in S.plan.meals)S.plan.meals[d].pros=S.plan.meals[d].pros.map(c=>c===o?n:c);}}
 function renameRoom(o,n){if(S.plan)S.plan.sessions.forEach(s=>{if(s.room===o)s.room=n;});}
 function renameActivity(o,n){if(S.plan)S.plan.sessions.forEach(s=>{if(s.activity===o)s.activity=n;});}
 function renamePerson(o,n){if(S.plan)S.plan.sessions.forEach(s=>s.participants=s.participants.map(c=>c===o?n:c));}
@@ -252,13 +305,15 @@ function sanitizePlan(st){
   const before=st.plan.sessions.length;
   st.plan.sessions=st.plan.sessions.filter(s=>acts.has(s.activity)&&pros.has(s.pro)&&rooms.has(s.room)&&slots.has(s.slot)&&days.has(s.day));
   st.plan.sessions.forEach(s=>{s.participants=s.participants.filter(c=>pers.has(c));s.family=st.activities.find(a=>a.name===s.activity).family;});
+  if(st.plan.meals)for(const d in st.plan.meals){if(!days.has(d)){delete st.plan.meals[d];continue;}st.plan.meals[d].pros=st.plan.meals[d].pros.filter(c=>pros.has(c));}
   return before-st.plan.sessions.length;
 }
 function cleanRefs(st,warns){
   const slotIds=new Set(st.slots.map(s=>s.id)),fams=new Set(st.families.map(f=>f.name)),pros=new Set(st.pros.map(p=>p.code));
-  st.pros.forEach(p=>{for(const d in p.avail){p.avail[d]=p.avail[d].filter(s=>slotIds.has(s));if(!p.avail[d].length)delete p.avail[d];}});
+  st.pros.forEach(p=>{p.mealDays=sortDays(p.mealDays||[]);for(const d in p.avail){p.avail[d]=p.avail[d].filter(s=>slotIds.has(s));if(!p.avail[d].length)delete p.avail[d];}});
   st.persons.forEach(p=>{
     p.unavail=(p.unavail||[]).filter(u=>slotIds.has(u.split('-')[1]));
+    p.meals=sortDays((p.meals||[]).filter(d=>p.days.includes(d)));
     const bad=p.needs.filter(f=>!fams.has(f));
     if(bad.length){warns.push(`Personne ${p.code} : besoin(s) « ${bad.join(', ')} » retiré(s) car la famille n'existe plus.`);p.needs=p.needs.filter(f=>fams.has(f));}
   });
@@ -321,7 +376,7 @@ function download(name,content,mime){
 }
 
 const CSV_TYPES={
-  parametres:{label:'Paramètres généraux',file:'parametres.csv',desc:"Une ligne par paramètre. Paramètres reconnus : jours_ouverts, max_ateliers_par_jour, min_participants_defaut, iterations.",cols:[
+  parametres:{label:'Paramètres généraux',file:'parametres.csv',desc:"Une ligne par paramètre. Paramètres reconnus : jours_ouverts, max_ateliers_par_jour, min_participants_defaut, iterations, repas_actif (oui/non), repas_debut, repas_fin, repas_encadrement (nombre de personnes pour 1 professionnel), repas_min_pros.",cols:[
     {k:'parametre',req:1,d:'Nom du paramètre',ex:'jours_ouverts'},
     {k:'valeur',req:1,d:'Valeur du paramètre',ex:'Lun,Mar,Mer,Jeu,Ven'}]},
   creneaux:{label:'Créneaux horaires',file:'creneaux.csv',desc:"Les plages horaires d'une journée type (les mêmes chaque jour d'ouverture).",cols:[
@@ -338,7 +393,8 @@ const CSV_TYPES={
   disponibilites:{label:'Disponibilités des professionnels',file:'disponibilites.csv',desc:"Une ligne par professionnel et par jour travaillé. Un jour absent du fichier = professionnel indisponible ce jour-là.",cols:[
     {k:'professionnel',req:1,d:'Code du professionnel (doit exister dans professionnels.csv ou dans l\'outil)',ex:'Anaïs'},
     {k:'jour',req:1,d:'Lun, Mar, Mer, Jeu, Ven, Sam ou Dim (ou le nom complet)',ex:'Lun'},
-    {k:'creneaux',d:'Codes des créneaux séparés par des virgules, ou « tous », « matin », « après-midi ». Vide = tous',ex:'M1,M2'}]},
+    {k:'creneaux',d:'Codes des créneaux séparés par des virgules, ou « tous », « matin », « après-midi », « aucun ». Vide = tous',ex:'M1,M2'},
+    {k:'repas',d:'oui / non : présent(e) ce jour-là pour encadrer le repas du midi (colonne facultative)',ex:'oui'}]},
   salles:{label:'Salles',file:'salles.csv',desc:"Les salles disponibles, leur capacité et les familles d'activités qu'elles peuvent accueillir.",cols:[
     {k:'salle',req:1,d:'Nom unique de la salle',ex:'Atelier créatif'},
     {k:'capacite',req:1,d:'Nombre maximum de personnes accompagnées',ex:'8'},
@@ -356,7 +412,8 @@ const CSV_TYPES={
     {k:'besoins',req:1,d:"Familles d'activités séparées par des virgules (orientation de l'équipe)",ex:'Création,Habiletés sociales'},
     {k:'nb_ateliers',req:1,d:"Nombre d'ateliers souhaités par semaine",ex:'3'},
     {k:'priorite',d:'1 = normale, 2 = haute, 3 = très haute (défaut : 1)',ex:'1'},
-    {k:'indisponibilites',d:'Créneaux à éviter (rendez-vous réguliers…) sous la forme Jour-Créneau, séparés par des virgules',ex:'Mar-M1,Jeu-A2'}]},
+    {k:'indisponibilites',d:'Créneaux à éviter (rendez-vous réguliers…) sous la forme Jour-Créneau, séparés par des virgules',ex:'Mar-M1,Jeu-A2'},
+    {k:'jours_repas',d:'Jours où la personne reste manger le midi, séparés par des virgules, ou « tous » (= tous ses jours de présence). Vide = aucun',ex:'Lun,Jeu'}]},
   agenda:{label:'Agenda (réimport)',file:'agenda_ateliers.csv',desc:"Le fichier exporté depuis l'onglet Agenda. Le réimporter permet de reprendre un agenda (avec ses ajustements manuels) un autre jour.",cols:[
     {k:'jour',req:1,d:'Jour',ex:'Lundi'},{k:'creneau',req:1,d:'Code du créneau',ex:'M1'},
     {k:'debut',ign:1,d:'(informatif, ignoré à l\'import)',ex:'09:30'},{k:'fin',ign:1,d:'(informatif, ignoré à l\'import)',ex:'10:45'},
@@ -364,40 +421,52 @@ const CSV_TYPES={
     {k:'animateur',req:1,d:'Professionnel qui anime',ex:'Anaïs'},{k:'salle',req:1,d:'Salle',ex:'Atelier créatif'},
     {k:'nb_participants',ign:1,d:'(informatif, ignoré à l\'import)',ex:'2'},{k:'capacite',ign:1,d:'(informatif, ignoré à l\'import)',ex:'8'},
     {k:'participants',d:'Codes des personnes, séparés par des virgules',ex:'P01,Léon'},
-    {k:'verrouille',d:'oui / non : atelier conservé lors d\'une nouvelle génération',ex:'non'}]}
+    {k:'verrouille',d:'oui / non : atelier conservé lors d\'une nouvelle génération',ex:'non'}]},
+  repas:{label:'Repas (réimport)',file:'repas.csv',desc:"Le fichier exporté depuis l'onglet Agenda : professionnels mobilisés au repas, jour par jour. Les personnes qui mangent viennent de leur fiche (colonne jours_repas).",cols:[
+    {k:'jour',req:1,d:'Jour',ex:'Lundi'},
+    {k:'professionnels_mobilises',req:1,d:'Professionnels qui encadrent le repas, séparés par des virgules',ex:'Anaïs,Bilal'},
+    {k:'nb_personnes',ign:1,d:'(informatif, ignoré à l\'import)',ex:'9'},{k:'personnes',ign:1,d:'(informatif, ignoré à l\'import)',ex:'P01,P04'},
+    {k:'besoin_pros',ign:1,d:'(informatif, ignoré à l\'import)',ex:'2'},
+    {k:'verrouille',d:'oui / non : conservé lors d\'une nouvelle génération',ex:'non'}]}
 };
-const IMPORT_ORDER=['parametres','creneaux','familles','professionnels','salles','activites','disponibilites','personnes','agenda'];
+const IMPORT_ORDER=['parametres','creneaux','familles','professionnels','salles','activites','disponibilites','personnes','agenda','repas'];
 const HEADER_ALIASES={jours:'jours_presence',presence:'jours_presence',nb_ateliers_semaine:'nb_ateliers',nombre_ateliers:'nb_ateliers',ateliers:'nb_ateliers',
   capacite_maximum:'capacite_max',seances_max:'max_seances_semaine',priorite_:'priorite',libelle_:'libelle',heure_debut:'debut',heure_fin:'fin',
   famille_compatibles:'familles_compatibles',familles_compatible:'familles_compatibles',indisponibilite:'indisponibilites',besoin:'besoins',
-  pro:'professionnel',code_professionnel:'professionnel',nom:'code',prenom:'code'};
+  pro:'professionnel',code_professionnel:'professionnel',nom:'code',prenom:'code',reste_manger:'jours_repas',jours_de_repas:'jours_repas',
+  pros_mobilises:'professionnels_mobilises',professionnels:'professionnels_mobilises'};
 const TEMPLATES={
-  parametres:[['jours_ouverts','Lun,Mar,Mer,Jeu,Ven'],['max_ateliers_par_jour','2'],['min_participants_defaut','2'],['iterations','60']],
+  parametres:[['jours_ouverts','Lun,Mar,Mer,Jeu,Ven'],['max_ateliers_par_jour','2'],['min_participants_defaut','2'],['iterations','60'],['repas_actif','oui'],['repas_debut','12:15'],['repas_fin','13:45'],['repas_encadrement','6'],['repas_min_pros','1']],
   creneaux:[['M1','Matin 1','09:30','10:45'],['M2','Matin 2','11:00','12:15'],['A1','Après-midi 1','13:45','15:00'],['A2','Après-midi 2','15:15','16:30']],
   familles:[['Création','#e07a5f'],['Activités sportives','#3d9970'],['Habiletés sociales','#4a7fc1']],
   professionnels:[['Anaïs','Éducatrice spécialisée'],['Bilal','Éducateur sportif']],
-  disponibilites:[['Anaïs','Lun','tous'],['Anaïs','Mar','M1,M2'],['Bilal','Mer','matin'],['Bilal','Jeu','A1,A2']],
+  disponibilites:[['Anaïs','Lun','tous','oui'],['Anaïs','Mar','M1,M2','oui'],['Bilal','Mer','matin','non'],['Bilal','Jeu','A1,A2','oui']],
   salles:[['Atelier créatif','8','Création'],['Gymnase','12','Activités sportives'],['Salle polyvalente','10','']],
   activites:[['Peinture','Création','Anaïs','8','2',''],['Marche','Activités sportives','Bilal','10','','3'],['Groupe de parole','Habiletés sociales','Anaïs,Bilal','8','3','']],
-  personnes:[['P01','Lun,Mar,Jeu','Création,Habiletés sociales','3','1',''],['P02','Mar,Mer','Activités sportives','2','2','Mar-M1'],['Léon','Lun,Jeu','Création,Activités sportives','2','1','']],
-  agenda:[['Lundi','M1','09:30','10:45','Peinture','Création','Anaïs','Atelier créatif','2','8','P01,Léon','non']]
+  personnes:[['P01','Lun,Mar,Jeu','Création,Habiletés sociales','3','1','','tous'],['P02','Mar,Mer','Activités sportives','2','2','Mar-M1','Mer'],['Léon','Lun,Jeu','Création,Activités sportives','2','1','','']],
+  agenda:[['Lundi','M1','09:30','10:45','Peinture','Création','Anaïs','Atelier créatif','2','8','P01,Léon','non']],
+  repas:[['Lundi','Anaïs','2','P01,Léon','1','non']]
 };
 
 /* ---------- Export des données ---------- */
 const EXPORTERS={
-  parametres:st=>[['parametre','valeur'],['jours_ouverts',openDays(st).join(',')],['max_ateliers_par_jour',st.settings.maxPerDay],['min_participants_defaut',st.settings.defaultMin],['iterations',st.settings.iterations]],
+  parametres:st=>[['parametre','valeur'],['jours_ouverts',openDays(st).join(',')],['max_ateliers_par_jour',st.settings.maxPerDay],['min_participants_defaut',st.settings.defaultMin],['iterations',st.settings.iterations],
+    ['repas_actif',mealOn(st)?'oui':'non'],['repas_debut',st.settings.meal.start],['repas_fin',st.settings.meal.end],['repas_encadrement',st.settings.meal.ratio],['repas_min_pros',st.settings.meal.minPros]],
   creneaux:st=>[['code','libelle','debut','fin'],...sortedSlots(st).map(s=>[s.id,s.label,s.start,s.end])],
   familles:st=>[['famille','couleur'],...st.families.map(f=>[f.name,f.color])],
   professionnels:st=>[['code','fonction'],...st.pros.map(p=>[p.code,p.role||''])],
-  disponibilites:st=>{const rows=[['professionnel','jour','creneaux']];const order=sortedSlots(st).map(s=>s.id);
-    st.pros.forEach(p=>DAY_ORDER.forEach(d=>{const a=(p.avail[d]||[]).slice().sort((x,y)=>order.indexOf(x)-order.indexOf(y));if(a.length)rows.push([p.code,d,a.length===order.length?'tous':a.join(',')]);}));return rows;},
+  disponibilites:st=>{const rows=[['professionnel','jour','creneaux','repas']];const order=sortedSlots(st).map(s=>s.id);
+    st.pros.forEach(p=>DAY_ORDER.forEach(d=>{const a=(p.avail[d]||[]).slice().sort((x,y)=>order.indexOf(x)-order.indexOf(y));const m=(p.mealDays||[]).includes(d);
+      if(a.length||m)rows.push([p.code,d,!a.length?'aucun':a.length===order.length?'tous':a.join(','),m?'oui':'non']);}));return rows;},
   salles:st=>[['salle','capacite','familles_compatibles'],...st.rooms.map(r=>[r.name,r.capacity,r.families.join(',')])],
   activites:st=>[['activite','famille','animateurs','capacite_max','min_participants','max_seances_semaine'],...st.activities.map(a=>[a.name,a.family,a.pros.join(','),a.capacity,a.min??'',a.maxPerWeek||''])],
-  personnes:st=>[['code','jours_presence','besoins','nb_ateliers','priorite','indisponibilites'],...st.persons.map(p=>[p.code,sortDays(p.days).join(','),p.needs.join(','),p.nb,p.priority||1,(p.unavail||[]).join(',')])],
-  agenda:st=>agendaRows(st)
+  personnes:st=>[['code','jours_presence','besoins','nb_ateliers','priorite','indisponibilites','jours_repas'],...st.persons.map(p=>[p.code,sortDays(p.days).join(','),p.needs.join(','),p.nb,p.priority||1,(p.unavail||[]).join(','),sortDays(p.meals||[]).join(',')])],
+  agenda:st=>agendaRows(st),
+  repas:st=>{const rows=[['jour','professionnels_mobilises','nb_personnes','personnes','besoin_pros','verrouille']];ensureMeals(st);
+    openDays(st).forEach(d=>{const mi=mealInfo(st,d);if(mi.eaters.length||mi.pros.length)rows.push([DAY_LABEL[d],mi.pros.join(','),mi.eaters.length,mi.eaters.join(','),mi.need,mi.locked?'oui':'non']);});return rows;}
 };
 function exportType(t){
-  if(t==='agenda'&&!S.plan)return toast("Aucun agenda à exporter : générez-le d'abord.",'err');
+  if((t==='agenda'||t==='repas')&&!S.plan)return toast("Aucun agenda à exporter : générez-le d'abord.",'err');
   download(CSV_TYPES[t].file,toCSV(EXPORTERS[t](S),exportSep()));
 }
 function templateType(t){const def=CSV_TYPES[t];download('modele_'+def.file,toCSV([def.cols.map(c=>c.k),...TEMPLATES[t]],exportSep()));}
@@ -434,6 +503,11 @@ const IMPORTERS={
       else if(k==='max_ateliers_par_jour'){const n=intStrict(v);if(!(n>=1&&n<=10)){rep.err(L,`« ${v} » : le nombre maximum d'ateliers par jour doit être un nombre entier entre 1 et 10.`);continue;}st.settings.maxPerDay=n;rep.ok++;}
       else if(k==='min_participants_defaut'){const n=intStrict(v);if(!(n>=1&&n<=50)){rep.err(L,`« ${v} » : le minimum de participants doit être un nombre entier entre 1 et 50.`);continue;}st.settings.defaultMin=n;rep.ok++;}
       else if(k==='iterations'){const n=intStrict(v);if(!(n>=1&&n<=500)){rep.err(L,`« ${v} » : le nombre d'essais doit être un nombre entier entre 1 et 500.`);continue;}st.settings.iterations=n;rep.ok++;}
+      else if(k==='repas_actif'){if(!['oui','non','o','n','1','0','vrai','faux','yes','no'].includes(norm(v))){rep.err(L,`« ${v} » : indiquez oui ou non.`);continue;}st.settings.meal.enabled=isYes(v);rep.ok++;}
+      else if(k==='repas_debut'||k==='repas_fin'){const t=normTime(v);if(!t){rep.err(L,`Heure « ${v} » non reconnue (format attendu : 12:15).`);continue;}st.settings.meal[k==='repas_debut'?'start':'end']=t;rep.ok++;
+        if(st.settings.meal.start>=st.settings.meal.end)rep.warn(L,"L'heure de fin du repas doit être après l'heure de début : vérifiez repas_debut et repas_fin.");}
+      else if(k==='repas_encadrement'){const n=intStrict(v);if(!(n>=1&&n<=50)){rep.err(L,`« ${v} » : nombre de personnes pour 1 professionnel attendu (entier entre 1 et 50).`);continue;}st.settings.meal.ratio=n;rep.ok++;}
+      else if(k==='repas_min_pros'){const n=intStrict(v);if(!(n>=0&&n<=20)){rep.err(L,`« ${v} » : nombre entier entre 0 et 20 attendu.`);continue;}st.settings.meal.minPros=n;rep.ok++;}
       else rep.warn(L,`Paramètre « ${r.parametre} » inconnu : ligne ignorée.`);
     }
   },
@@ -476,19 +550,23 @@ const IMPORTERS={
       if(seen.has(norm(code))){rep.err(L,`Le professionnel « ${code} » apparaît déjà ligne ${seen.get(norm(code))}.`);continue;}
       seen.set(norm(code),L);
       const prev=old.find(p=>sameKey(p.code,code));
-      upsert(st.pros,p=>p.code,{code:prev?prev.code:code,role:(r.fonction||'').trim(),avail:prev?clone(prev.avail):{}},code);rep.ok++;
+      upsert(st.pros,p=>p.code,{code:prev?prev.code:code,role:(r.fonction||'').trim(),avail:prev?clone(prev.avail):{},mealDays:prev?(prev.mealDays||[]).slice():[]},code);rep.ok++;
     }
   },
   disponibilites(st,rows,mode,rep){
-    if(mode==='replace')st.pros.forEach(p=>p.avail={});const touched=new Set();
+    const hasMeal=rows.length&&('repas' in rows[0]);
+    if(mode==='replace')st.pros.forEach(p=>{p.avail={};if(hasMeal)p.mealDays=[];});const touched=new Set();
     const slots=sortedSlots(st);
     for(const r of rows){const L=r._line;
       const pro=findPro(st,(r.professionnel||'').trim());
       if(!pro){rep.err(L,`Professionnel « ${r.professionnel||''} » inconnu. Ajoutez-le d'abord (onglet Professionnels ou fichier professionnels.csv).`);continue;}
       const d=parseDay(r.jour);
       if(!d){rep.err(L,`Jour « ${r.jour||''} » non reconnu. Utilisez Lun, Mar, Mer, Jeu, Ven, Sam ou Dim.`);continue;}
+      const rv=norm(r.repas);
+      if(hasMeal&&rv&&!['oui','non','o','n','1','0','x','vrai','faux','yes','no'].includes(rv)){rep.err(L,`Colonne repas : « ${r.repas} » non compris, indiquez oui ou non.`);continue;}
       const v=norm(r.creneaux);let list;
-      if(!v||v==='tous'||v==='toute la journee'||v==='journee')list=slots.map(s=>s.id);
+      if(v==='aucun'||v==='aucune'||v==='0')list=[];
+      else if(!v||v==='tous'||v==='toute la journee'||v==='journee')list=slots.map(s=>s.id);
       else if(v==='matin')list=slots.filter(s=>s.start<'12:30').map(s=>s.id);
       else if(v==='apres-midi'||v==='apres midi'||v==='aprem'||v==='apres_midi')list=slots.filter(s=>s.start>='12:30').map(s=>s.id);
       else{const items=splitList(r.creneaux);const found=items.map(x=>findSlot(st,x));const bad=items.filter((x,i)=>!found[i]);
@@ -496,6 +574,8 @@ const IMPORTERS={
         list=found.map(s=>s.id);}
       const key=pro.code+'|'+d;
       if(touched.has(key))pro.avail[d]=[...new Set([...(pro.avail[d]||[]),...list])];else{pro.avail[d]=list;touched.add(key);}
+      if(!pro.avail[d].length)delete pro.avail[d];
+      if(hasMeal&&rv){pro.mealDays=(pro.mealDays||[]).filter(x=>x!==d);if(isYes(rv))pro.mealDays=sortDays([...pro.mealDays,d]);}
       if(!st.settings.openDays.includes(d))rep.warn(L,`${pro.code} : le ${DAY_LABEL[d].toLowerCase()} n'est pas un jour d'ouverture (disponibilité conservée mais non utilisée).`);
       rep.ok++;
     }
@@ -535,7 +615,7 @@ const IMPORTERS={
     }
   },
   personnes(st,rows,mode,rep){
-    if(mode==='replace')st.persons=[];const seen=new Map();
+    const oldPersons=st.persons;if(mode==='replace')st.persons=[];const seen=new Map();
     for(const r of rows){const L=r._line,code=(r.code||'').trim();
       const pb=personCodeProblem(code);if(pb){rep.err(L,pb);continue;}
       if(seen.has(norm(code))){rep.err(L,`Le code « ${code} » est déjà utilisé ligne ${seen.get(norm(code))} : chaque personne doit avoir un code unique.`);continue;}
@@ -558,7 +638,18 @@ const IMPORTERS={
       if(closed.length)rep.warn(L,`${code} : ${closed.map(d=>DAY_LABEL[d]).join(', ')} n'est pas un jour d'ouverture (ignoré pour la planification).`);
       const possible=days.filter(d=>st.settings.openDays.includes(d)).length*st.settings.maxPerDay;
       if(nb>possible)rep.warn(L,`${code} demande ${nb} atelier(s) mais ne peut en avoir que ${possible} au maximum (${st.settings.maxPerDay} par jour de présence).`);
-      upsert(st.persons,p=>p.code,{code,days,needs:[...new Set(fs.map(f=>f.name))],nb,priority:pr,unavail:[...new Set(un)]},code);rep.ok++;
+      // Repas : colonne facultative ; absente = on garde ce qui était déjà saisi
+      let meals;
+      if('jours_repas' in r){const mv=norm(r.jours_repas);
+        if(!mv||['aucun','non','n','0'].includes(mv))meals=[];
+        else if(['tous','oui','o','toujours'].includes(mv))meals=days.slice();
+        else{const mi=splitList(r.jours_repas);const md=mi.map(parseDay);const bm=mi.filter((x,i)=>!md[i]);
+          if(bm.length){rep.err(L,`Jours de repas « ${bm.join(', ')} » non reconnus. Utilisez Lun, Mar… ou « tous ».`);continue;}
+          const out=md.filter(x=>!days.includes(x));
+          if(out.length)rep.warn(L,`${code} : repas indiqué le ${out.map(x=>DAY_LABEL[x].toLowerCase()).join(', ')} alors que la personne n'est pas présente ce jour-là (ignoré).`);
+          meals=sortDays(md.filter(x=>days.includes(x)));}}
+      else{const pv=oldPersons.find(p=>sameKey(p.code,code));meals=pv?(pv.meals||[]).filter(x=>days.includes(x)):[];}
+      upsert(st.persons,p=>p.code,{code,days,needs:[...new Set(fs.map(f=>f.name))],nb,priority:pr,unavail:[...new Set(un)],meals},code);rep.ok++;
     }
   },
   agenda(st,rows,mode,rep){
@@ -580,6 +671,19 @@ const IMPORTERS={
       if(ps.length>Math.min(a.capacity,room.capacity))rep.warn(L,`Capacité dépassée : ${ps.length} participants pour ${Math.min(a.capacity,room.capacity)} places.`);
       st.plan.sessions.push({id:uid(),activity:a.name,family:a.family,day:d,slot:sl.id,pro:pro.code,room:room.name,participants:[...new Set(ps.map(p=>p.code))].sort(byCode),locked:['oui','o','yes','1','x','vrai'].includes(norm(r.verrouille))});
       rep.ok++;
+    }
+  },
+  repas(st,rows,mode,rep){
+    if(!st.plan)st.plan={sessions:[],generatedAt:'importé le '+new Date().toLocaleString('fr-FR')};
+    if(mode==='replace'||!st.plan.meals)st.plan.meals={};
+    for(const r of rows){const L=r._line;
+      const d=parseDay(r.jour);if(!d){rep.err(L,`Jour « ${r.jour||''} » non reconnu.`);continue;}
+      const items=splitList(r.professionnels_mobilises);const ps=items.map(x=>findPro(st,x));const bad=items.filter((x,i)=>!ps[i]);
+      if(bad.length){rep.err(L,`Professionnel(s) « ${bad.join(', ')} » inconnu(s).`);continue;}
+      const noMeal=ps.filter(p=>!(p.mealDays||[]).includes(d));
+      if(noMeal.length)rep.warn(L,`${noMeal.map(p=>p.code).join(', ')} : pas indiqué(e)(s) disponible(s) au repas le ${DAY_LABEL[d].toLowerCase()} (conservé quand même).`);
+      if(!st.settings.openDays.includes(d))rep.warn(L,`Le ${DAY_LABEL[d].toLowerCase()} n'est pas un jour d'ouverture : ligne sans effet.`);
+      st.plan.meals[d]={pros:[...new Set(ps.map(p=>p.code))],locked:isYes(r.verrouille)};rep.ok++;
     }
   }
 };
@@ -662,7 +766,7 @@ function buildContext(st){
   const actByFam={};activities.forEach(a=>(actByFam[a.family]=actByFam[a.family]||[]).push(a));
   const persons=st.persons.map((p,i)=>{
     const needs=p.needs.filter(n=>famSet.has(n));const un=new Set(p.unavail||[]);
-    const availList=dsList.filter(ds=>{const[d,s]=ds.split('|');return p.days.includes(d)&&!un.has(d+'-'+s);});
+    const availList=dsList.filter(ds=>{const[d,s]=ds.split('|');return p.days.includes(d)&&!un.has(d+'-'+s)&&!mealBlocks(st,p,d,s);});
     const nAct=needs.reduce((n,f)=>n+(actByFam[f]||[]).length,0);
     return {idx:i,code:p.code,needs,needSet:new Set(needs),nb:Math.max(0,p.nb|0),prio:p.priority||1,avail:new Set(availList),availList,flex:availList.length*Math.max(1,nAct)};
   });
@@ -813,7 +917,7 @@ function diagnosePerson(st,plan,idx,p){
   const acts=st.activities.filter(a=>needs.includes(a.family));
   if(!acts.length)return out;
   const un=new Set(p.unavail||[]);const possible=[];
-  pdays.forEach(d=>slots.forEach(s=>{if(!un.has(d+'-'+s))possible.push(d+'|'+s);}));
+  pdays.forEach(d=>slots.forEach(s=>{if(!un.has(d+'-'+s)&&!mealBlocks(st,p,d,s))possible.push(d+'|'+s);}));
   const maxPossible=Math.min(possible.length,pdays.length*st.settings.maxPerDay);
   if(maxPossible<p.nb)out.push(R('Créneaux',`Au maximum ${maxPossible} atelier(s) possible(s) sur ses jours de présence (${pdays.length} jour(s), ${st.settings.maxPerDay} atelier(s) par jour au plus) pour ${p.nb} souhaité(s).`));
   const free=possible.filter(ds=>!idx.busyP.get(p.code)?.has(ds)&&(idx.dayCnt.get(p.code+'|'+ds.slice(0,3))||0)<st.settings.maxPerDay);
@@ -863,6 +967,10 @@ function analyze(st,plan){
     if(!compatibleRooms(st,a).length)alerts.push(`Aucune salle n'est compatible avec l'activité « ${a.name} ».`);
   });
   st.pros.forEach(p=>{if(!openDays(st).some(d=>(p.avail[d]||[]).length))alerts.push(`${p.code} n'a aucune disponibilité saisie.`);});
+  if(mealOn(st)&&plan)openDays(st).forEach(d=>{const mi=mealInfo(st,d);if(!mi.missing)return;
+    const cands=mealCandidates(st,plan,d).length;
+    alerts.push(`Repas du ${DAY_LABEL[d].toLowerCase()} : ${mi.need} professionnel(s) nécessaire(s) pour ${mi.eaters.length} personne(s), ${mi.pros.length} mobilisé(s). `+
+      (cands<mi.need?`Seulement ${cands} professionnel(s) indiqué(s) disponible(s) au repas ce jour-là (onglet Professionnels).`:"Ouvrez le repas dans l'agenda pour compléter."));});
   return {rows,alerts,demand,obtained,complete,partial,none,idx};
 }
 
@@ -888,7 +996,7 @@ function renderAccueil(){
     <li><b>Professionnels</b> : ajoutez chaque professionnel et cochez ses disponibilités.</li>
     <li><b>Salles</b> : indiquez la capacité et, si besoin, les familles d'activités qu'elles accueillent.</li>
     <li><b>Activités</b> : rattachez chaque activité à une famille et choisissez qui peut l'animer.</li>
-    <li><b>Personnes</b> : pour chaque personne, ses jours de présence, ses besoins et le nombre d'ateliers souhaités.</li>
+    <li><b>Personnes</b> : pour chaque personne, ses jours de présence, les jours où elle reste au repas, ses besoins et le nombre d'ateliers souhaités.</li>
     <li>Cliquez sur <b>⚙️ Générer l'agenda</b> (en haut à droite), puis consultez l'onglet <b>📅 Agenda</b> et son récapitulatif.</li>
   </ol>
   <p>Vous pouvez aussi tout importer d'un coup depuis des fichiers CSV préparés dans Excel (onglet <b>Import / Export CSV</b>).</p>
@@ -929,12 +1037,26 @@ function renderParametres(){
   <div class="card"><h2>Familles d'activités</h2><p class="muted">Les grandes familles de besoins décidées en réunion d'équipe. La couleur est reprise dans l'agenda.</p>
     <table class="data"><thead><tr><th>Couleur</th><th>Nom</th><th>Activités</th><th>Personnes</th><th></th></tr></thead><tbody>${famRows||'<tr><td colspan="5" class="muted">Aucune famille.</td></tr>'}</tbody></table>
     <div class="btns"><button class="btn" data-act="addFam">+ Ajouter une famille</button></div></div>
+  ${mealSettingsCard()}
   <div class="card"><h2>Confidentialité et sauvegarde</h2>
     <p>Par défaut, <b>rien n'est enregistré</b> : à la fermeture de la page, les données disparaissent. Exportez vos CSV pour les conserver (onglet Import / Export).</p>
     <label class="chk"><input type="checkbox" data-change="persist" ${st.persist?'checked':''}> Mémoriser les données dans ce navigateur, sur ce poste (option, désactivée par défaut)</label>
     <p class="muted">Si vous l'activez, les données restent sur ce poste uniquement (stockage local du navigateur), sans envoi. Toute personne utilisant la même session de ce poste pourrait les voir : à réserver à un poste professionnel personnel et sécurisé. Décocher efface immédiatement ces données mémorisées.</p>
     <div class="btns"><button class="btn btn-danger-o" data-act="resetAll">Tout effacer</button></div></div>
   </div></div>`;
+}
+
+function mealSettingsCard(){
+  const m=S.settings.meal,ov=[...mealOverlap()];
+  return `<div class="card"><h2>🍽 Repas du midi</h2>
+    <label class="chk"><input type="checkbox" data-change="mealSetting" data-key="enabled" ${m.enabled?'checked':''}> Gérer le repas (qui reste manger, quels professionnels l'encadrent)</label>
+    ${m.enabled?`<div class="row"><div class="field"><label>Début</label><input type="time" value="${m.start}" data-change="mealSetting" data-key="start"></div>
+    <div class="field"><label>Fin</label><input type="time" value="${m.end}" data-change="mealSetting" data-key="end"></div></div>
+    <div class="field"><label>Encadrement : 1 professionnel pour</label><input type="number" min="1" max="50" value="${m.ratio}" data-change="mealSetting" data-key="ratio"> personnes</div>
+    <div class="field"><label>Minimum de professionnels dès qu'au moins une personne reste manger</label><input type="number" min="0" max="20" value="${m.minPros}" data-change="mealSetting" data-key="minPros"></div>
+    <p class="muted">Qui reste manger : fiche de chaque personne. Qui peut encadrer : fiche de chaque professionnel.</p>
+    ${ov.length?`<div class="alert alert-warn">Les créneaux ${ov.map(esc).join(', ')} chevauchent l'horaire du repas : une personne qui reste manger ne sera pas inscrite à un atelier sur ces créneaux, et un professionnel mobilisé au repas ne pourra pas y animer.</div>`:''}`:''}
+  </div>`;
 }
 
 /* ---------- Grille jours × créneaux ---------- */
@@ -955,16 +1077,17 @@ function renderPros(){
   const e=editing.pros,pr=e?S.pros.find(p=>p.code===e):null;const total=openDays().length*S.slots.length;
   const rows=S.pros.map(p=>{const acts=S.activities.filter(a=>a.pros.includes(p.code)).map(a=>esc(a.name)).join(', ');
     const n=openDays().reduce((k,d)=>k+(p.avail[d]||[]).filter(s=>S.slots.some(x=>x.id===s)).length,0);
-    return `<tr><td><b>${esc(p.code)}</b></td><td>${esc(p.role||'')}</td><td>${acts||'<span class="muted">—</span>'}</td><td>${n?`${n} / ${total}`:'<span class="st-non">aucune</span>'}</td>
+    return `<tr><td><b>${esc(p.code)}</b></td><td>${esc(p.role||'')}</td><td>${acts||'<span class="muted">—</span>'}</td><td>${n?`${n} / ${total}`:'<span class="st-non">aucune</span>'}</td>${mealOn()?`<td>${sortDays((p.mealDays||[]).filter(d=>S.settings.openDays.includes(d))).join(', ')||'<span class="muted">—</span>'}</td>`:''}
     <td style="white-space:nowrap"><button class="btn btn-sm" data-act="editPro" data-code="${esc(p.code)}">Modifier</button> <button class="btn btn-sm btn-danger-o" data-act="delPro" data-code="${esc(p.code)}">Supprimer</button></td></tr>`;}).join('');
   return `<div class="card"><h2>${pr?'Modifier : '+esc(pr.code):'Ajouter un professionnel'}</h2><div class="formbox">
     <div class="row"><div class="field"><label for="f-pro-code">Prénom ou code</label><input id="f-pro-code" value="${esc(pr?pr.code:'')}" placeholder="ex. Anaïs"></div>
     <div class="field"><label for="f-pro-role">Fonction (facultatif)</label><input id="f-pro-role" size="30" value="${esc(pr?pr.role:'')}" placeholder="ex. Éducatrice spécialisée"></div></div>
     <div class="field"><label>Disponibilités (cochez les créneaux où cette personne peut animer)</label>${grid('pro-avail',pr?availSet(pr.avail):new Set())}</div>
+    ${mealOn()?`<div class="field"><label>🍽 Peut encadrer le repas du midi (${S.settings.meal.start}–${S.settings.meal.end})</label>${openDays().map(d=>`<label class="chk"><input type="checkbox" name="pro-meal" value="${d}" ${pr&&(pr.mealDays||[]).includes(d)?'checked':''}> ${DAY_LABEL[d]}</label>`).join('')}</div>`:''}
     <div class="btns"><button class="btn btn-primary" data-act="savePro">Enregistrer</button>${pr?'<button class="btn" data-act="cancelEdit" data-tab="pros">Annuler</button>':''}</div></div>
     <p class="muted">Les activités qu'un professionnel anime se choisissent dans l'onglet <b>Activités</b>.</p></div>
   <div class="card"><h2>Professionnels (${S.pros.length})</h2>
-    <table class="data"><thead><tr><th>Code</th><th>Fonction</th><th>Anime</th><th>Créneaux disponibles</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="muted">Aucun professionnel pour le moment.</td></tr>'}</tbody></table></div>`;
+    <table class="data"><thead><tr><th>Code</th><th>Fonction</th><th>Anime</th><th>Créneaux disponibles</th>${mealOn()?'<th>Repas</th>':''}<th></th></tr></thead><tbody>${rows||'<tr><td colspan="6"class="muted">Aucun professionnel pour le moment.</td></tr>'}</tbody></table></div>`;
 }
 
 /* ---------- Salles ---------- */
@@ -1017,6 +1140,8 @@ function renderPersons(){
     <div class="field"><label for="f-per-nb">Ateliers souhaités / semaine</label><input id="f-per-nb" type="number" min="1" max="30" value="${p?p.nb:3}"></div>
     <div class="field"><label for="f-per-prio">Priorité</label><select id="f-per-prio">${[1,2,3].map(k=>`<option value="${k}" ${(p?p.priority:1)===k?'selected':''}>${PRIO[k]}</option>`).join('')}</select><br><small>Servie en premier si les places manquent.</small></div></div>
     <div class="field"><label>Jours de présence</label>${days||'<span class="muted">Aucun jour d\'ouverture défini.</span>'}</div>
+    ${mealOn()?`<div class="field"><label>🍽 Reste au repas du midi</label>${openDays().map(d=>`<label class="chk"><input type="checkbox" name="per-meals" value="${d}" ${p&&(p.meals||[]).includes(d)?'checked':''}> ${DAY_LABEL[d]}</label>`).join('')}
+      <button type="button" class="linkbtn" data-act="mealsLikeDays">= tous ses jours de présence</button></div>`:''}
     <div class="field"><label>Besoins (familles d'activités décidées en équipe)</label>${needs}</div>
     <details ${un.size?'open':''}><summary>Créneaux à éviter (rendez-vous réguliers, soins…) — facultatif</summary>${grid('per-unavail',un)}</details>
     <div class="btns"><button class="btn btn-primary" data-act="savePerson">Enregistrer</button>${p?'<button class="btn" data-act="cancelEdit" data-tab="persons">Annuler</button>':''}</div></div></div>
@@ -1031,12 +1156,13 @@ function personsTable(){
     const cls=got==null?'':got>=p.nb?'st-complet':got===0?'st-non':'st-partiel';
     return `<tr><td><b>${esc(p.code)}</b></td><td>${sortDays(p.days).join(', ')}</td><td>${p.needs.map(chip).join('')}</td><td>${p.nb}</td>
     ${idx?`<td class="status ${cls}">${got} / ${p.nb}</td>`:''}<td>${PRIO[p.priority||1]}</td>
+    ${mealOn()?`<td>${(p.meals||[]).filter(d=>S.settings.openDays.includes(d)).join(', ')||'<span class="muted">—</span>'}</td>`:''}
     <td>${(p.unavail||[]).join(', ')||'<span class="muted">—</span>'}</td>
     <td style="white-space:nowrap"><button class="btn btn-sm" data-act="editPerson" data-code="${esc(p.code)}">Modifier</button>
     ${idx?`<button class="btn btn-sm" data-act="filterPerson" data-code="${esc(p.code)}">Sa semaine</button>`:''}
     <button class="btn btn-sm btn-danger-o" data-act="delPerson" data-code="${esc(p.code)}">Supprimer</button></td></tr>`;}).join('');
-  return `<table class="data"><thead><tr><th>Code</th><th>Présence</th><th>Besoins</th><th>Souhaités</th>${idx?'<th>Obtenus</th>':''}<th>Priorité</th><th>À éviter</th><th></th></tr></thead>
-    <tbody>${rows||`<tr><td colspan="8" class="muted">${S.persons.length?'Aucun résultat.':'Aucune personne pour le moment.'}</td></tr>`}</tbody></table>`;
+  return `<table class="data"><thead><tr><th>Code</th><th>Présence</th><th>Besoins</th><th>Souhaités</th>${idx?'<th>Obtenus</th>':''}<th>Priorité</th>${mealOn()?'<th>Repas</th>':''}<th>À éviter</th><th></th></tr></thead>
+    <tbody>${rows||`<tr><td colspan="9"class="muted">${S.persons.length?'Aucun résultat.':'Aucune personne pour le moment.'}</td></tr>`}</tbody></table>`;
 }
 
 /* ---------- Import / Export ---------- */
@@ -1081,10 +1207,21 @@ function agendaRows(st){
 function slotById(st,id){return st.slots.find(s=>s.id===id)||{start:'',end:'',label:id};}
 function sortedSessions(st){const so=sortedSlots(st).map(s=>s.id);return st.plan.sessions.slice().sort((a,b)=>DAY_ORDER.indexOf(a.day)-DAY_ORDER.indexOf(b.day)||so.indexOf(a.slot)-so.indexOf(b.slot)||a.activity.localeCompare(b.activity,'fr'));}
 function exportPersonAgenda(){
-  if(!S.plan)return;const rows=[['personne','jour','creneau','debut','fin','activite','famille','animateur','salle']];
-  const ss=sortedSessions(S);
-  S.persons.slice().sort((a,b)=>byCode(a.code,b.code)).forEach(p=>ss.filter(s=>s.participants.includes(p.code)).forEach(s=>{const sl=slotById(S,s.slot);rows.push([p.code,DAY_LABEL[s.day],s.slot,sl.start,sl.end,s.activity,s.family,s.pro,s.room]);}));
+  if(!S.plan)return;ensureMeals(S);const rows=[['personne','jour','creneau','debut','fin','activite','famille','animateur','salle']];
+  const ss=sortedSessions(S),m=S.settings.meal;
+  S.persons.slice().sort((a,b)=>byCode(a.code,b.code)).forEach(p=>{
+    const items=ss.filter(s=>s.participants.includes(p.code)).map(s=>{const sl=slotById(S,s.slot);return {d:s.day,t:sl.start,r:[p.code,DAY_LABEL[s.day],s.slot,sl.start,sl.end,s.activity,s.family,s.pro,s.room]};});
+    openDays().forEach(d=>{if(eatsOn(S,p,d))items.push({d,t:m.start,r:[p.code,DAY_LABEL[d],'REPAS',m.start,m.end,'Repas','',mealInfo(S,d).pros.join(','),'']});});
+    items.sort((a,b)=>DAY_ORDER.indexOf(a.d)-DAY_ORDER.indexOf(b.d)||a.t.localeCompare(b.t)).forEach(i=>rows.push(i.r));});
   download('agenda_par_personne.csv',toCSV(rows,exportSep()));
+}
+function exportFree(){
+  if(!S.plan)return;ensureMeals(S);const rows=[['jour','creneau','debut','fin','professionnel','fonction']];
+  for(const d of openDays())for(const r of agendaRowsDef()){
+    const list=r.type==='meal'?freeProsMeal(S,S.plan,d):freePros(S,S.plan,d,r.s.id);
+    const a=r.type==='meal'?['REPAS',S.settings.meal.start,S.settings.meal.end]:[r.s.id,r.s.start,r.s.end];
+    list.forEach(c=>rows.push([DAY_LABEL[d],...a,c,(S.pros.find(p=>p.code===c)||{}).role||'']));}
+  download('pros_disponibles_non_affectes.csv',toCSV(rows,exportSep()));
 }
 function exportRecap(){
   if(!S.plan)return;const an=analyze(S,S.plan);
@@ -1094,10 +1231,55 @@ function exportRecap(){
 }
 
 /* ---------- Agenda ---------- */
+function freeLine(list){return UI.showFree?`<div class="free-line">${list.length?'Libres : '+list.map(esc).join(', '):'<span class="muted">Aucun pro libre</span>'}</div>`:'';}
+function mealCell(d,fk,fv){
+  const mi=mealInfo(S,d);const open=`data-act="openMeal" data-day="${d}" role="button" tabindex="0" title="Cliquer pour modifier"`;
+  if(fk==='room'||fk==='fam')return '<td class="cell meal-cell"></td>';
+  if(fk==='person')return `<td class="cell meal-cell">${mi.eaters.includes(fv)?`<div class="meal" ${open}>🍽 Reste au repas</div>`:''}</td>`;
+  if(fk==='pro'){const on=mi.pros.includes(fv),free=!on&&freeProsMeal(S,S.plan,d).includes(fv);
+    return `<td class="cell meal-cell">${on?`<div class="meal" ${open}>🍽 Mobilisé(e) au repas · ${mi.eaters.length} pers.</div>`:''}${free?'<div class="free-note">✅ Disponible au repas – non mobilisé(e)</div>':''}</td>`;}
+  const free=freeProsMeal(S,S.plan,d);
+  if(!mi.eaters.length&&!mi.pros.length)return `<td class="cell meal-cell"><div class="meal empty" ${open}>🍽 Personne au repas</div>${freeLine(free)}</td>`;
+  return `<td class="cell meal-cell"><div class="meal ${mi.missing?'short':''}" ${open}>
+    <div class="s-title">${mi.locked?'🔒 ':''}🍽 Repas · ${mi.eaters.length} personne(s)</div>
+    <div class="s-meta">👤 ${mi.pros.length?mi.pros.map(esc).join(', '):'aucun professionnel'} (${mi.pros.length}/${mi.need})</div>
+    ${mi.missing?`<div class="s-count under">Manque ${mi.missing} professionnel(s)</div>`:''}
+    ${UI.showParts&&mi.eaters.length?`<div class="s-parts">${mi.eaters.map(esc).join(', ')}</div>`:''}</div>${freeLine(free)}</td>`;
+}
+function renderMealCard(days){
+  const rows=days.map(d=>{const mi=mealInfo(S,d);const st=!mi.eaters.length?'<span class="muted">—</span>':mi.missing?`<span class="st-non">Manque ${mi.missing}</span>`:'<span class="st-complet">OK</span>';
+    return `<tr><td><b>${DAY_LABEL[d]}</b>${mi.locked?' 🔒':''}</td><td>${mi.eaters.length}</td><td>${mi.need}</td><td>${mi.pros.map(esc).join(', ')||'<span class="muted">—</span>'}</td><td>${st}</td>
+      <td class="no-print"><button class="btn btn-sm" data-act="openMeal" data-day="${d}">Modifier</button></td></tr>`;}).join('');
+  return `<div class="card"><h2>🍽 Repas de la semaine (${S.settings.meal.start}–${S.settings.meal.end})</h2>
+    <p class="muted">Encadrement : 1 professionnel pour ${S.settings.meal.ratio} personnes, minimum ${S.settings.meal.minPros}. Les professionnels sont choisis parmi ceux indiqués disponibles au repas, en répartissant les repas équitablement sur la semaine.</p>
+    <table class="data"><thead><tr><th>Jour</th><th>Personnes</th><th>Pros nécessaires</th><th>Pros mobilisés</th><th>État</th><th class="no-print"></th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="btns no-print"><button class="btn" data-act="recomputeMeals">↻ Recalculer les repas (sauf verrouillés)</button><button class="btn" data-act="exportType" data-type="repas">⬇ Repas (CSV, réimportable)</button></div></div>`;
+}
+function renderFreeCard(days){
+  const defs=agendaRowsDef();
+  let g=`<div class="agenda-wrap"><table class="data free-grid"><thead><tr><th>Créneau</th>${days.map(d=>`<th>${DAY_LABEL[d]}</th>`).join('')}</tr></thead><tbody>`;
+  for(const r of defs){
+    const head=r.type==='meal'?`🍽 Repas<br><small>${S.settings.meal.start}–${S.settings.meal.end}</small>`:`${esc(r.s.label||r.s.id)}<br><small>${r.s.start}–${r.s.end}</small>`;
+    g+=`<tr><th>${head}</th>`+days.map(d=>{const l=r.type==='meal'?freeProsMeal(S,S.plan,d):freePros(S,S.plan,d,r.s.id);
+      return `<td>${l.length?l.map(c=>`<span class="chip chip-free">${esc(c)}</span>`).join(''):'<span class="muted">—</span>'}</td>`;}).join('')+'</tr>';
+  }
+  g+='</tbody></table></div>';
+  const per=S.pros.map(p=>{const f=proFreeSummary(S,p.code);
+    return `<tr><td><b>${esc(p.code)}</b><br><small>${esc(p.role||'')}</small></td><td>${f.av}</td><td>${f.n}</td><td>${f.av?Math.round(f.n/f.av*100)+' %':'—'}</td>
+      <td><b class="${f.nFree?'st-partiel':''}">${f.nFree}</b>${f.parts.length?'<br><small>'+esc(f.parts.join(' · '))+'</small>':''}</td>
+      ${mealOn()?`<td>${f.mealMob.length} / ${f.mealAv.length}${f.mealFree.length?'<br><small>Libre : '+f.mealFree.join(', ')+'</small>':''}</td>`:''}
+      <td class="no-print"><button class="btn btn-sm" data-act="filterPro" data-code="${esc(p.code)}">Sa semaine</button></td></tr>`;}).join('');
+  return `<div class="card"><h2>Professionnels disponibles non affectés</h2>
+    <p class="muted">Professionnels présents sur le créneau (d'après leurs disponibilités) mais qui n'animent aucun atelier${mealOn()?' et ne sont pas mobilisés au repas':''}. Utile pour renforcer un atelier, ouvrir un groupe supplémentaire ou planifier du temps de réunion, d'écrits ou de coordination.</p>
+    ${g}
+    <h3>Par professionnel</h3>
+    <table class="data"><thead><tr><th>Professionnel</th><th>Créneaux disponibles</th><th>Ateliers animés</th><th>Utilisation</th><th>Créneaux libres</th>${mealOn()?'<th>Repas mobilisés / possibles</th>':''}<th class="no-print"></th></tr></thead><tbody>${per}</tbody></table>
+    <div class="btns no-print"><button class="btn" data-act="exportFree">⬇ Pros disponibles non affectés (CSV)</button></div></div>`;
+}
 function renderAgenda(){
   if(!S.plan)return `<div class="card"><h2>Agenda hebdomadaire</h2><p>Aucun agenda pour le moment. Saisissez ou importez vos données, puis cliquez sur <b>⚙️ Générer l'agenda</b> en haut à droite.</p>
     <p>Vous pouvez aussi <button class="btn btn-sm" data-act="startEmptyPlan">composer un agenda entièrement à la main</button> ou réimporter un agenda exporté (onglet Import / Export).</p></div>`;
-  sanitizePlan(S);
+  sanitizePlan(S);ensureMeals(S);
   const an=analyze(S,S.plan);const days=openDays(),slots=sortedSlots();
   const f=UI.filter;const [fk,fv]=f==='all'?['all','']:[f.slice(0,f.indexOf(':')),f.slice(f.indexOf(':')+1)];
   const keep=s=>fk==='all'||(fk==='pro'&&s.pro===fv)||(fk==='room'&&s.room===fv)||(fk==='fam'&&s.family===fv)||(fk==='person'&&s.participants.includes(fv));
@@ -1108,11 +1290,15 @@ function renderAgenda(){
     <optgroup label="Par famille">${S.families.map(x=>opt('fam:'+x.name,x.name)).join('')}</optgroup>
     <optgroup label="Par personne">${S.persons.slice().sort((a,b)=>byCode(a.code,b.code)).map(p=>opt('person:'+p.code,p.code)).join('')}</optgroup></select>`;
   let gridH=`<div class="agenda-wrap"><table class="agenda"><thead><tr><th class="slot" style="background:#1f3a5f;color:#fff">Créneau</th>${days.map(d=>`<th>${DAY_LABEL[d]}</th>`).join('')}</tr></thead><tbody>`;
-  for(const sl of slots){
+  for(const r of agendaRowsDef()){
+    if(r.type==='meal'){gridH+=`<tr class="meal-row"><th class="slot">🍽 Repas<br><small>${S.settings.meal.start}–${S.settings.meal.end}</small></th>${days.map(d=>mealCell(d,fk,fv)).join('')}</tr>`;continue;}
+    const sl=r.s;
     gridH+=`<tr><th class="slot">${esc(sl.label||sl.id)}<br><small>${sl.start}–${sl.end}</small></th>`;
     for(const d of days){
       const ss=S.plan.sessions.filter(s=>s.day===d&&s.slot===sl.id&&keep(s)).sort((a,b)=>a.family.localeCompare(b.family,'fr')||a.activity.localeCompare(b.activity,'fr'));
-      gridH+=`<td class="cell"><div class="cell-inner">${ss.map(sessionCard).join('')}</div><button class="add-s" data-act="newSession" data-day="${d}" data-slot="${esc(sl.id)}" title="Ajouter un atelier ici">+ atelier</button></td>`;
+      const free=freePros(S,S.plan,d,sl.id);
+      const note=fk==='pro'&&free.includes(fv)?'<div class="free-note">✅ Disponible – non affecté(e)</div>':'';
+      gridH+=`<td class="cell"><div class="cell-inner">${ss.map(sessionCard).join('')}${note}</div>${fk==='all'?freeLine(free):''}<button class="add-s" data-act="newSession" data-day="${d}" data-slot="${esc(sl.id)}" title="Ajouter un atelier ici">+ atelier</button></td>`;
     }
     gridH+='</tr>';
   }
@@ -1120,6 +1306,8 @@ function renderAgenda(){
   const pct=an.demand?Math.round(an.obtained/an.demand*100):0;
   let personHead='';
   if(fk==='person'){const r=an.rows.find(x=>x.code===fv);if(r)personHead=`<div class="alert ${r.status==='complet'?'alert-ok':'alert-warn'}">Semaine de <b>${esc(fv)}</b> : ${r.got} atelier(s) sur ${r.nb} souhaité(s).${r.reasons.length?'<ul>'+r.reasons.map(x=>`<li><span class="tag t-${norm(x.cat).replace(/\s/g,'')}">${esc(x.cat)}</span>${esc(x.msg)}</li>`).join('')+'</ul>':''}</div>`;}
+  if(fk==='pro'&&S.pros.some(p=>p.code===fv)){const s=proFreeSummary(S,fv);
+    personHead=`<div class="alert alert-info">Semaine de <b>${esc(fv)}</b> : ${s.n} atelier(s) animé(s) pour ${s.av} créneau(x) disponible(s)${mealOn()?`, ${s.mealMob.length} repas encadré(s)`:''}. <b>${s.nFree} créneau(x) disponible(s) non affecté(s)</b>${s.parts.length?' : '+esc(s.parts.join(' · ')):''}${s.mealFree.length?` · repas libre : ${s.mealFree.join(', ')}`:''}.</div>`;}
   const pending=an.rows.filter(r=>r.status!=='complet').sort((a,b)=>({non:0,partiel:1}[a.status]-{non:0,partiel:1}[b.status])||b.priority-a.priority||byCode(a.code,b.code));
   const recap=pending.length?`<table class="data"><thead><tr><th>Personne</th><th>Statut</th><th>Obtenus</th><th>Raisons détectées</th><th class="no-print"></th></tr></thead><tbody>${pending.map(r=>`<tr>
       <td><b>${esc(r.code)}</b>${r.priority>1?`<br><small>Priorité ${PRIO[r.priority].toLowerCase()}</small>`:''}</td>
@@ -1128,16 +1316,18 @@ function renderAgenda(){
       <td class="no-print"><button class="btn btn-sm" data-act="filterPerson" data-code="${esc(r.code)}">Sa semaine</button></td></tr>`).join('')}</tbody></table>`
     :'<div class="alert alert-ok">✅ Toutes les personnes ont obtenu le nombre d\'ateliers souhaité.</div>';
   const nSlots=days.length*slots.length;
-  const proRows=S.pros.map(p=>{const n=S.plan.sessions.filter(s=>s.pro===p.code).length;const av=days.reduce((k,d)=>k+(p.avail[d]||[]).filter(x=>slots.some(s=>s.id===x)).length,0);
-    return `<tr><td>${esc(p.code)}</td><td>${n}</td><td>${av}</td><td>${av?Math.round(n/av*100)+' %':'—'}</td></tr>`;}).join('');
   const roomRows=S.rooms.map(r=>{const ss=S.plan.sessions.filter(s=>s.room===r.name);const pl=ss.reduce((k,s)=>k+s.participants.length,0);
     return `<tr><td>${esc(r.name)}</td><td>${ss.length} / ${nSlots}</td><td>${ss.length?Math.round(pl/ss.length*10)/10:'—'} / ${r.capacity}</td></tr>`;}).join('');
   const under=S.plan.sessions.filter(s=>{const a=S.activities.find(x=>x.name===s.activity);return s.participants.length<effMin(a);}).length;
+  const mealMissing=mealOn()?days.reduce((k,d)=>k+mealInfo(S,d).missing,0):0;
+  const mealMob=mealOn()?days.reduce((k,d)=>k+mealInfo(S,d).pros.length,0):0;
+  const freeTotal=days.reduce((k,d)=>k+slots.reduce((j,s)=>j+freePros(S,S.plan,d,s.id).length,0),0);
   return `<div class="print-only"><h2>Agenda hebdomadaire des ateliers${fk!=='all'?' — '+esc(fv):''}</h2><p>Édité le ${new Date().toLocaleDateString('fr-FR')}</p></div>
-  ${S.planStale?'<div class="alert stale no-print">⚠ Les données ont été modifiées depuis la génération de cet agenda. Cliquez sur <b>⚙️ Générer l\'agenda</b> pour en tenir compte (les ateliers verrouillés 🔒 seront conservés).</div>':''}
+  ${S.planStale?'<div class="alert stale no-print">⚠ Les données ont été modifiées depuis la génération de cet agenda. Cliquez sur <b>⚙️ Générer l\'agenda</b> pour en tenir compte (les ateliers et repas verrouillés 🔒 seront conservés), ou sur « Recalculer les repas » si seuls les repas ont changé.</div>':''}
   <div class="card no-print"><div class="toolbar"><h2 style="margin:0">Agenda hebdomadaire</h2><span class="muted">${S.plan.generatedAt?'Généré le '+esc(S.plan.generatedAt):'Composé manuellement'}${S.plan.runs?` · ${S.plan.runs} essais comparés`:''}</span><span class="spacer"></span>
     <label>Afficher : ${filterSel}</label>
-    <label class="chk"><input type="checkbox" data-change="showParts" ${UI.showParts?'checked':''}> Noms des participants</label></div>
+    <label class="chk"><input type="checkbox" data-change="showParts" ${UI.showParts?'checked':''}> Noms des participants</label>
+    <label class="chk"><input type="checkbox" data-change="showFree" ${UI.showFree?'checked':''}> Pros libres dans chaque case</label></div>
     <div class="stats">
       <div class="stat"><b>${an.obtained} / ${an.demand}</b><span>ateliers attribués (${pct} %)</span></div>
       <div class="stat"><b class="st-complet">${an.complete}</b><span>personnes complètes</span></div>
@@ -1145,19 +1335,40 @@ function renderAgenda(){
       <div class="stat"><b class="st-non">${an.none}</b><span>non affectées</span></div>
       <div class="stat"><b>${S.plan.sessions.length}</b><span>séances dans la semaine</span></div>
       ${under?`<div class="stat"><b class="st-non">${under}</b><span>séances sous le minimum</span></div>`:''}
+      ${mealOn()?`<div class="stat"><b class="${mealMissing?'st-non':'st-complet'}">${mealMob}</b><span>mobilisations repas${mealMissing?` · manque ${mealMissing}`:''}</span></div>`:''}
+      <div class="stat"><b>${freeTotal}</b><span>créneaux-pro disponibles non affectés</span></div>
     </div>
     <div class="legend">${S.families.map(x=>chip(x.name)).join('')}</div>
     <div class="btns"><button class="btn" data-act="exportType" data-type="agenda">⬇ Agenda (CSV, réimportable)</button><button class="btn" data-act="exportPersonAgenda">⬇ Agenda par personne (CSV)</button>
+      ${mealOn()?'<button class="btn" data-act="exportType" data-type="repas">⬇ Repas (CSV)</button>':''}<button class="btn" data-act="exportFree">⬇ Pros non affectés (CSV)</button>
       <button class="btn" data-act="exportRecap">⬇ Récapitulatif (CSV)</button><button class="btn" data-act="print">🖨 Imprimer / PDF</button>
       <button class="btn btn-danger-o" data-act="clearPlan">Vider l'agenda</button></div>
-    <p class="muted">Cliquez sur un atelier pour le modifier (participants, horaire, salle, animateur) ou sur « + atelier » pour en créer un. Un atelier <b>verrouillé 🔒</b> est conservé tel quel lors d'une nouvelle génération.</p></div>
-  ${an.alerts.length?`<div class="alert alert-warn no-print"><b>Points de vigilance dans les données :</b><ul>${an.alerts.map(a=>`<li>${esc(a)}</li>`).join('')}</ul></div>`:''}
+    <p class="muted">Cliquez sur un atelier${mealOn()?' ou un repas':''} pour le modifier, ou sur « + atelier » pour en créer un. Un élément <b>verrouillé 🔒</b> est conservé tel quel lors d'une nouvelle génération.</p></div>
+  ${an.alerts.length?`<div class="alert alert-warn no-print"><b>Points de vigilance :</b><ul>${an.alerts.map(a=>`<li>${esc(a)}</li>`).join('')}</ul></div>`:''}
   ${personHead}
   <div class="card">${gridH}</div>
   <div class="card"><h2>Récapitulatif : personnes non ou partiellement affectées (${pending.length})</h2>
     <p class="muted">Pour chaque personne, les raisons sont classées de la plus fréquente à la moins fréquente, d'après l'examen de tous ses créneaux libres et de toutes les activités correspondant à ses besoins.</p>${recap}</div>
-  <div class="row no-print"><div class="col"><div class="card"><h2>Charge des professionnels</h2><table class="data"><thead><tr><th>Professionnel</th><th>Séances</th><th>Créneaux disponibles</th><th>Utilisation</th></tr></thead><tbody>${proRows}</tbody></table></div></div>
-  <div class="col"><div class="card"><h2>Occupation des salles</h2><table class="data"><thead><tr><th>Salle</th><th>Créneaux occupés</th><th>Participants moyens / capacité</th></tr></thead><tbody>${roomRows}</tbody></table></div></div></div>`;
+  ${mealOn()?renderMealCard(days):''}
+  ${renderFreeCard(days)}
+  <div class="card no-print"><h2>Occupation des salles</h2><table class="data"><thead><tr><th>Salle</th><th>Créneaux occupés</th><th>Participants moyens / capacité</th></tr></thead><tbody>${roomRows}</tbody></table></div>`;
+}
+function renderMealDraft(){
+  const d=mealDraft.day,eaters=eatersOn(S,d),need=mealNeed(S,eaters.length),m=S.settings.meal;
+  const pros=S.pros.slice().sort((a,b)=>((b.mealDays||[]).includes(d))-((a.mealDays||[]).includes(d))||byCode(a.code,b.code)).map(p=>{const n=[];
+    if(!(p.mealDays||[]).includes(d))n.push('non indiqué(e) disponible au repas ce jour-là');
+    const o=proBusyOverlap(S,S.plan,p.code,d);if(o)n.push(`anime « ${o.activity} » pendant le repas`);
+    return `<li><label class="chk"><input type="checkbox" data-change="mPro" value="${esc(p.code)}" ${mealDraft.pros.includes(p.code)?'checked':''}> <b>${esc(p.code)}</b> <small>${esc(p.role||'')}</small></label>
+      ${n.length?`<span class="${o?'err-txt':'muted'}">${esc(n.join(' ; '))}</span>`:'<span class="st-complet">✓ disponible</span>'}</li>`;}).join('');
+  const nb=mealDraft.pros.length;
+  openModal(`<h2>🍽 Repas du ${DAY_LABEL[d].toLowerCase()} (${m.start}–${m.end})</h2>
+    <p><b>${eaters.length}</b> personne(s) restent manger${eaters.length?' : '+eaters.map(esc).join(', '):''}.</p>
+    <p>Encadrement nécessaire : <b>${need}</b> professionnel(s) (1 pour ${m.ratio}, minimum ${m.minPros}). Mobilisé(s) : <b class="${nb<need?'st-non':'st-complet'}">${nb}</b>.</p>
+    ${nb<need?`<div class="alert alert-warn">Encadrement insuffisant : il manque ${need-nb} professionnel(s).</div>`:''}
+    <h3>Professionnels mobilisés</h3><ul class="parts">${pros||'<li class="muted">Aucun professionnel.</li>'}</ul>
+    <label class="chk"><input type="checkbox" data-change="mLock" ${mealDraft.locked?'checked':''}> 🔒 Verrouiller : conserver ce choix lors d'une nouvelle génération</label>
+    <p class="muted">La liste des personnes qui restent manger se modifie dans leur fiche (onglet Personnes).</p>
+    <div class="btns"><button class="btn btn-primary" data-act="mSave">Enregistrer</button><button class="btn" data-act="closeModal">Annuler</button></div>`);
 }
 function sessionCard(s){
   const a=S.activities.find(x=>x.name===s.activity);const cap=sessCap(S,s),n=s.participants.length,min=effMin(a);
@@ -1178,6 +1389,7 @@ function personCheck(code,d,idx,a){
   const ds=d.day+'|'+d.slot;
   if(!p.days.includes(d.day))return {err:`absent(e) le ${DAY_LABEL[d.day].toLowerCase()}`};
   if((p.unavail||[]).includes(d.day+'-'+d.slot))return {err:'créneau à éviter pour cette personne'};
+  if(mealBlocks(S,p,d.day,d.slot))return {err:'reste au repas pendant ce créneau'};
   const o=idx.busyP.get(code)?.get(ds);if(o)return {err:`déjà dans « ${o.activity} » sur ce créneau`};
   const w=[];
   if(a&&!p.needs.includes(a.family))w.push(`« ${a.family} » ne fait pas partie de ses besoins`);
@@ -1193,6 +1405,8 @@ function validateDraft(d){
   if(!r)errors.push('Choisissez une salle.');
   if(pr){const o=idx.busyPro.get(d.pro+'|'+ds);if(o)errors.push(`${d.pro} anime déjà « ${o.activity} » sur ce créneau.`);
     if(!proAvailable(S,d.pro,ds))warnings.push(`${d.pro} n'est pas indiqué(e) disponible sur ce créneau.`);
+    const md=S.plan.meals&&S.plan.meals[d.day];
+    if(md&&md.pros.includes(d.pro)&&mealOverlap().has(d.slot))errors.push(`${d.pro} est mobilisé(e) au repas pendant ce créneau.`);
     if(a&&!a.pros.includes(d.pro))warnings.push(`${d.pro} ne fait pas partie des animateurs prévus pour « ${a.name} ».`);}
   if(r){const o=idx.busyRoom.get(d.room+'|'+ds);if(o)errors.push(`La salle « ${d.room} » est déjà occupée par « ${o.activity} » sur ce créneau.`);
     if(a&&r.families.length&&!r.families.includes(a.family))warnings.push(`La salle « ${r.name} » n'est pas prévue pour la famille « ${a.family} ».`);}
@@ -1250,7 +1464,7 @@ function generate(){
   if(S.plan&&S.plan.sessions.some(s=>!s.locked)&&!confirm("Générer un nouvel agenda remplace l'agenda actuel.\nLes ateliers verrouillés 🔒 seront conservés.\n\nContinuer ?"))return;
   $('#overlay').hidden=false;
   setTimeout(()=>{
-    try{sanitizePlan(S);S.plan=optimize(S);S.planStale=false;persist();currentTab='agenda';UI.filter='all';render();
+    try{sanitizePlan(S);const np=optimize(S);np.meals=assignMeals(S,np,S.plan&&S.plan.meals);S.plan=np;S.planStale=false;persist();currentTab='agenda';UI.filter='all';render();
       const an=analyze(S,S.plan);toast(`Agenda généré : ${an.obtained} atelier(s) attribué(s) sur ${an.demand} souhaité(s).`);window.scrollTo(0,0);}
     catch(e){console.error(e);toast('Erreur inattendue pendant le calcul : '+e.message,'err');}
     finally{$('#overlay').hidden=true;}
@@ -1292,6 +1506,10 @@ function demoState(){
     const nb=Math.min(nd*2,2+Math.floor(rng()*3));
     st.persons.push({code:'P'+String(i).padStart(2,'0'),days,needs,nb,priority:rng()<0.15?2:1,unavail:rng()<0.2?[days[0]+'-'+all()[Math.floor(rng()*4)]]:[]});
   }
+  // Repas (exemple) : qui peut encadrer, qui reste manger
+  const md={Anaïs:['Lun','Mar','Jeu'],Bilal:['Lun','Mer','Ven'],Chloé:['Mar','Ven'],David:['Lun','Mer','Jeu','Ven'],Emma:['Mar','Jeu'],Farid:['Mar','Mer']};
+  st.pros.forEach(p=>p.mealDays=md[p.code]||[]);
+  const r2=mulberry32(7);st.persons.forEach(p=>p.meals=p.days.filter(()=>r2()<0.7));
   return st;
 }
 
@@ -1331,7 +1549,9 @@ const ACTIONS={
     const prev=old?S.pros.find(p=>p.code===old):null;const avail={};
     if(prev)for(const d in prev.avail)if(!S.settings.openDays.includes(d))avail[d]=prev.avail[d].slice();
     for(const v of gridValues('pro-avail')){const[d,s]=v.split('|');(avail[d]=avail[d]||[]).push(s);}
-    if(prev){if(old!==code)renamePro(old,code);Object.assign(prev,{code,role,avail});}else S.pros.push({code,role,avail});
+    const keepMeal=prev?(prev.mealDays||[]).filter(d=>!S.settings.openDays.includes(d)||!mealOn()):[];
+    const mealDays=sortDays([...keepMeal,...(mealOn()?checkedValues('pro-meal'):[])]);
+    if(prev){if(old!==code)renamePro(old,code);Object.assign(prev,{code,role,avail,mealDays});}else S.pros.push({code,role,avail,mealDays});
     editing.pros=null;changed();render();toast(`${code} enregistré(e).`);},
   // Salles
   editRoom:b=>{editing.rooms=b.dataset.code;render();window.scrollTo(0,0);},
@@ -1374,7 +1594,11 @@ const ACTIONS={
     const needs=checkedValues('per-needs');if(!needs.length)return toast('Cochez au moins un besoin (famille d\'activités).','err');
     if(!(nb>=1&&nb<=30))return toast("Le nombre d'ateliers doit être un nombre entier entre 1 et 30.",'err');
     const unavail=gridValues('per-unavail').map(v=>v.replace('|','-'));
-    const item={code,days,needs,nb,priority:prio,unavail};
+    let meals=prev?(prev.meals||[]).filter(d=>days.includes(d)):[];
+    if(mealOn()){const mc=checkedValues('per-meals');const out=mc.filter(d=>!days.includes(d));
+      if(out.length)return toast(`Repas coché le ${out.map(d=>DAY_LABEL[d].toLowerCase()).join(', ')} alors que la personne n'est pas présente ce jour-là.`,'err');
+      meals=sortDays([...meals.filter(d=>!S.settings.openDays.includes(d)),...mc]);}
+    const item={code,days,needs,nb,priority:prio,unavail,meals};
     if(prev){if(old!==code)renamePerson(old,code);Object.assign(prev,item);}else S.persons.push(item);
     editing.persons=null;changed();render();toast(`${code} enregistré(e).`);},
   filterPerson:b=>{UI.filter='person:'+b.dataset.code;currentTab='agenda';render();window.scrollTo(0,0);},
@@ -1409,7 +1633,15 @@ const ACTIONS={
     const i=S.plan.sessions.findIndex(x=>x.id===s.id);if(i>=0)S.plan.sessions[i]=s;else S.plan.sessions.push(s);
     draft=null;closeModal();planChanged();render();toast('Atelier enregistré.');},
   dDelete:()=>{if(!confirm('Supprimer cet atelier de l\'agenda ?'))return;S.plan.sessions=S.plan.sessions.filter(x=>x.id!==draft.id);draft=null;closeModal();planChanged();render();},
-  closeModal:()=>closeModal()
+  closeModal:()=>closeModal(),
+  // Repas
+  openMeal:b=>{ensureMeals(S);const mi=mealInfo(S,b.dataset.day);mealDraft={day:b.dataset.day,pros:mi.pros.slice(),locked:mi.locked,lockTouched:false};renderMealDraft();},
+  mSave:()=>{S.plan.meals=S.plan.meals||{};S.plan.meals[mealDraft.day]={pros:mealDraft.pros.slice().sort(byCode),locked:!!mealDraft.locked};
+    mealDraft=null;closeModal();planChanged();render();toast('Repas enregistré.');},
+  recomputeMeals:()=>{S.plan.meals=assignMeals(S,S.plan,S.plan.meals);planChanged();render();toast('Mobilisation des repas recalculée (repas verrouillés conservés).');},
+  mealsLikeDays:()=>{const pd=new Set(checkedValues('per-days'));document.querySelectorAll('input[name="per-meals"]').forEach(i=>i.checked=pd.has(i.value));},
+  exportFree,
+  filterPro:b=>{UI.filter='pro:'+b.dataset.code;render();window.scrollTo(0,0);}
 };
 /* ---------- Changements de champs ---------- */
 const CHANGES={
@@ -1440,6 +1672,15 @@ const CHANGES={
     render();},
   agendaFilter:el=>{UI.filter=el.value;render();},
   showParts:el=>{UI.showParts=el.checked;render();},
+  showFree:el=>{UI.showFree=el.checked;render();},
+  mPro:el=>{const c=el.value;mealDraft.pros=el.checked?[...new Set([...mealDraft.pros,c])]:mealDraft.pros.filter(x=>x!==c);if(!mealDraft.lockTouched)mealDraft.locked=true;renderMealDraft();},
+  mLock:el=>{mealDraft.locked=el.checked;mealDraft.lockTouched=true;},
+  mealSetting:el=>{const m=S.settings.meal,k=el.dataset.key;
+    if(k==='enabled'){m.enabled=el.checked;}
+    else if(k==='start'||k==='end'){const t=normTime(el.value);if(!t){toast('Heure invalide (format HH:MM).','err');el.value=m[k];return;}
+      const n={...m,[k]:t};if(n.start>=n.end){toast("L'heure de fin du repas doit être après l'heure de début.",'err');el.value=m[k];return;}m[k]=t;}
+    else{const lim=k==='ratio'?[1,50]:[0,20];const n=intStrict(el.value);if(!(n>=lim[0]&&n<=lim[1])){toast(`Valeur invalide : nombre entier entre ${lim[0]} et ${lim[1]}.`,'err');el.value=m[k];return;}m[k]=n;}
+    changed();render();},
   dAct:el=>{draft.activity=el.value;const a=S.activities.find(x=>x.name===el.value);
     if(a&&!a.pros.includes(draft.pro)){const idx=planIndex(S,S.plan,draft.id),ds=draft.day+'|'+draft.slot;const p=a.pros.find(c=>proAvailable(S,c,ds)&&!idx.busyPro.has(c+'|'+ds));if(p)draft.pro=p;}
     touchDraft();},
@@ -1462,7 +1703,7 @@ document.addEventListener('dragleave',e=>{if(e.target.classList&&e.target.classL
 document.addEventListener('drop',e=>{e.preventDefault();const z=e.target.closest&&e.target.closest('#dropzone');document.querySelectorAll('.dropzone').forEach(d=>d.classList.remove('over'));
   if(z&&e.dataTransfer&&e.dataTransfer.files.length)handleImportFiles(e.dataTransfer.files);
   else if(e.dataTransfer&&e.dataTransfer.files.length)toast("Pour importer, déposez les fichiers dans le cadre de l'onglet « Import / Export CSV ».",'err');});
-$('#modal').addEventListener('close',()=>{draft=null;pendingImport=null;});
+$('#modal').addEventListener('close',()=>{draft=null;pendingImport=null;mealDraft=null;});
 window.addEventListener('beforeunload',e=>{if(!S.settings.persist&&(S.persons.length||S.pros.length||S.activities.length||S.plan)){e.preventDefault();e.returnValue='';}});
 
 /* ---------- Démarrage ---------- */
